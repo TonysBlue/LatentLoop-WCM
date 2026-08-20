@@ -1,6 +1,7 @@
 # Formal production profile. It uses the validated 0.2424B model shape
 # but has production data identity and experiment paths.
 model:
+  architecture_id: latentloop-perceiver-jepa-v1
   model_dim: 896
   latent_dim: 1024
   num_layers: 18
@@ -11,8 +12,9 @@ model:
   audio_kernel: 400
   audio_stride: 160
   vision_tokens: 16
-  temporal_kv_units: 750
-  vision_kv_units: 100
+  perceiver_slots: 16
+  perceiver_layers: 2
+  predictor_layers: 2
   latent_slots: 16
   world_state_update_type: gated_residual
   delta_time_fourier_bands: 8
@@ -68,6 +70,7 @@ training:
   backbone_train_mode: all
   speech_loss_weight: 1.0
   action_loss_weight: 1.0
+  jepa_loss_weight: 1.0
   memory_horizon_units: 750
   min_learning_rate_ratio: 0.1
   rl:

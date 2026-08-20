@@ -31,6 +31,7 @@ class CheckpointMetadata:
     codec_weight_hash: str
     git_commit: str
     codec_revision: str = "unknown"
+    architecture_id: str = "latentloop-perceiver-jepa-v1"
     parent_sha256: str | None = None
     stage: str = "pretrain"
     algorithm: str | None = None
@@ -69,7 +70,7 @@ def _serialize_state(state: RecurrentState | None) -> dict[str, Any] | None:
         return None
     return {
         "layer_kv": [
-            (cache.key.cpu(), cache.value.cpu(), cache.is_visual.cpu())
+            (cache.key.cpu(), cache.value.cpu())
             for cache in state.layer_kv
         ],
         "latent": state.latent.cpu(),
@@ -99,12 +100,8 @@ def _deserialize_state(
         return None
     return RecurrentState(
         layer_kv=tuple(
-            LayerKV(
-                key=key.to(device),
-                value=value.to(device),
-                is_visual=is_visual.to(device),
-            )
-            for key, value, is_visual in payload["layer_kv"]
+            LayerKV(key=key.to(device), value=value.to(device))
+            for key, value in payload["layer_kv"]
         ),
         latent=payload["latent"].to(device),
         audio_cache=payload["audio_cache"].to(device),
@@ -135,6 +132,8 @@ def _parse_metadata(payload: Any) -> CheckpointMetadata:
         )
     if "algorithm" not in payload:
         raise ValueError("checkpoint algorithm identity is missing")
+    if payload.get("architecture_id") != "latentloop-perceiver-jepa-v1":
+        raise ValueError("checkpoint architecture identity is missing or obsolete")
     return CheckpointMetadata(**payload)
 
 
@@ -277,6 +276,7 @@ class CheckpointManager:
             "codec_id",
             "codec_weight_hash",
             "codec_revision",
+            "architecture_id",
             "stage",
             "algorithm",
             "action_schema_id",

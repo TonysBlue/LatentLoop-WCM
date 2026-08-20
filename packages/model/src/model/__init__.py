@@ -9,7 +9,8 @@ from model.action import ActionHead, action_frame_log_prob, action_log_prob_comp
 from model.core import FactorizedSpeechHead, StreamingLatentLoop
 from model.encoders import DeltaTimeEncoder
 from model.latentloop import WorldStateUpdate
-from model.losses import compute_losses
+from model.losses import compute_jepa_loss, compute_losses
+from model.perceiver import Perceiver, PredictionAdapter, Predictor
 from model.types import (
     ActionFrame,
     ActionHeadOutput,
@@ -29,10 +30,11 @@ from model.value import ValueHead
 __all__ = [
     "ActionFrame", "ActionHead", "ActionHeadOutput", "ActionLocalState", "Episode",
     "FactorizedSpeechHead",
+    "Perceiver", "PredictionAdapter", "Predictor",
     "DeltaTimeEncoder",
     "GenerationOutput", "LayerKV", "RecurrentState", "SpeechLocalState", "SpeechMode",
     "SpeechSamplingConfig", "StepOutput", "StreamUnit", "StreamingLatentLoop",
     "WorldStateUpdate",
     "ValueHead",
-    "action_frame_log_prob", "action_log_prob_components", "compute_losses",
+    "action_frame_log_prob", "action_log_prob_components", "compute_jepa_loss", "compute_losses",
 ]

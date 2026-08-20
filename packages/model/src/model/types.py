@@ -348,10 +348,9 @@ class Episode:
 class LayerKV:
     key: Tensor
     value: Tensor
-    is_visual: Tensor
 
     def detach(self) -> LayerKV:
-        return LayerKV(self.key.detach(), self.value.detach(), self.is_visual.detach())
+        return LayerKV(self.key.detach(), self.value.detach())
 
 
 @dataclass(slots=True)
@@ -431,6 +430,10 @@ class StepOutput:
     speech_codec_logits: Tensor
     action: ActionHeadOutput
     hidden: Tensor
+    perceiver_slots: Tensor
+    predicted_next_slots: Tensor
+    future_gate_mean: Tensor
+    future_gate_max: Tensor
     value: Tensor
     selected_speech_mode: Tensor
 

@@ -1,6 +1,7 @@
 # Canary uses the complete Pretrain -> SFT -> Online RL recipe on a small real
 # dataset. Online RL uses Online Recurrent PPO; all three formal stages train the full model.
 model:
+  architecture_id: latentloop-perceiver-jepa-v1
   model_dim: 512
   latent_dim: 512
   num_layers: 8
@@ -11,8 +12,9 @@ model:
   audio_kernel: 400
   audio_stride: 160
   vision_tokens: 16
-  temporal_kv_units: 750
-  vision_kv_units: 100
+  perceiver_slots: 16
+  perceiver_layers: 2
+  predictor_layers: 2
   latent_slots: 8
   world_state_update_type: gated_residual
   delta_time_fourier_bands: 8
@@ -68,6 +70,7 @@ training:
   backbone_train_mode: all
   speech_loss_weight: 1.0
   action_loss_weight: 1.0
+  jepa_loss_weight: 1.0
   memory_horizon_units: 750
   min_learning_rate_ratio: 0.1
   rl:

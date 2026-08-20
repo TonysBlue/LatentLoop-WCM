@@ -1,7 +1,7 @@
 # 直接流式语音（Speech Head）实施说明
 
 > 状态：最终目标语音协议
-> 日期：2026-08-08
+> 日期：2026-08-20
 > 关联顶层架构：[实时流多模态 LatentLoop 完整方案](realtime-multimodal-latent-loop.md)
 > 对称动作协议：[统一电脑动作输出协议](unified-action.md)
 
@@ -14,10 +14,12 @@ SILENCE 由 Model Service 输出全零 80 ms PCM，Harness 不理解 Mimi。
 直接语音路径将模型时钟固定为 80 ms。每个 unit 接收一路 24 kHz、1920 样本的混合麦克风输入。完整状态顺序为：
 
 ~~~
-E_t       = InputEncoder(U_t)
-Z_t       = WorldStateUpdate(Z_(t-1), H_(t-1))
-H_t, KV_t = Backbone(E_t, KV_(t-1), Z_t)
-speech_t  = SpeechHead(H_t, speech_local_(t-1))
+P_t                 = Perceiver(O_t)
+Z_t                 = WorldStateUpdate(Z_(t-1), H_(t-1))
+P_hat_(t+1|t)       = Predictor(P_t, Z_t)
+F_t                 = PredictionAdapter(stop_grad(P_hat_(t+1|t))) + E_future
+H_t, KV_t           = Backbone(P_t, Z_t, F_t, KV_(t-1))
+speech_t            = SpeechHead(H_t, speech_local_(t-1))
 ~~~
 
 Speech Head 每个 unit 预测 SILENCE 或 SPEECH。只有 SPEECH unit 输出一个 Mimi 帧，冻结的因果 decoder 将其转换为 1920 个波形采样。运行路径不经过文本或 TTS；播放回流在下一 unit 作为混合麦克风输入重新进入模型。
@@ -41,10 +43,12 @@ codec runtime 通过独立 worker 提供 health、reset、encode_step 和 decode
 
 ## 3. Speech Head
 
-Speech Head 使用当前完整 hidden 的输出位置和上一时刻 speech local state：
+Speech Head 使用一个 learned speech query cross-attend 当前完整 16-slot hidden，再结合上一
+时刻 speech local state。它不读取某个固定 token 位置，也不把 Perceiver slot 解释为视觉网格：
 
 ~~~
-H_t + speech_local_(t-1)
+speech_context_t = Attention(speech_query, H_t)
+speech_context_t + speech_local_(t-1)
     -> speech mode logits
     -> causal/factorized codec logits
     -> generated Mimi codes
@@ -96,7 +100,9 @@ L_speech = L_speech_mode + L_speech_codec
 
 `L_speech_mode` 对有效 SILENCE/SPEECH 标签计算 CE；`L_speech_codec` 只对 SPEECH unit 的有效 frame/codebook 计算 CE。没有独立 SpeechControl、prosody、boundary、memory 或 write loss。
 
-未来 speech loss 通过：
+当前和未来 speech loss 通过 Speech Head、Backbone、Perceiver、Future Adapter/Gate 以及
+TBPTT 内的 WorldStateUpdate 传播。Future 分支在 Predictor 输出处 stop-gradient，因此
+speech loss 不训练 Predictor；Predictor 只由 JEPA loss 训练。长期路径为：
 
 ~~~
 future speech loss
@@ -118,4 +124,5 @@ future speech loss
 - codec worker 和 checkpoint 使用同一 identity；
 - 连续解码无 NaN、削波、帧漂移和不可接受边界突变；
 - Speech mode、每个 codebook accuracy 和静音误触发率可评测；
-- Speech Head、Backbone 和 WorldStateUpdate 的梯度路径正常。
+- Speech Head、Backbone、Perceiver、Future Adapter/Gate 和 WorldStateUpdate 的梯度路径正常；
+- speech loss 不越过 predicted slots 的 stop-gradient 进入 Predictor。

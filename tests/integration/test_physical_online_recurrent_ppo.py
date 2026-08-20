@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 from pathlib import Path
 
@@ -80,6 +81,7 @@ def test_formal_physical_online_recurrent_ppo_runs_one_update(
             "data.audio_sample_rate=24000",
             "data.unit_audio_samples=1920",
             "training.stage=sft",
+            "training.jepa_loss_weight=0.5",
         ],
     )
     manager.save(
@@ -116,10 +118,20 @@ def test_formal_physical_online_recurrent_ppo_runs_one_update(
     assert result["train_state"]["consumed_units"] > config.training.rl.ppo_window_units
     assert result["train_state"]["dropped_windows"] >= 1
     assert result["metrics"]["rl/reward_mean"] > 0
+    assert torch.isfinite(torch.tensor(result["metrics"]["train/loss_jepa_on_policy"]))
+    assert torch.isfinite(torch.tensor(result["metrics"]["train/loss_jepa_replay"]))
     assert result["metrics"]["rl/finalization_lag_units"] >= 0
     assert result["metrics"]["runtime/elapsed_seconds"] > 0
     assert result["metrics"]["runtime/units_per_second"] > 0
     assert result["metrics"]["runtime/peak_memory_allocated_bytes"] >= 0
+    trainable_windows = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in (tmp_path / "experiment" / "rollout-windows").glob("window-*.json")
+    ]
+    assert len(trainable_windows) == 1
+    window = trainable_windows[0]
+    assert window["lookahead_unit_index"] == window["end_unit"] + 1
+    assert len(window["lookahead_payload_sha256"]) == 64
 
 
 def test_online_recurrent_ppo_resumes_the_same_lifetime_session(
@@ -188,6 +200,7 @@ def test_online_recurrent_ppo_resumes_the_same_lifetime_session(
             "data.audio_sample_rate=24000",
             "data.unit_audio_samples=1920",
             "training.stage=sft",
+            "training.jepa_loss_weight=0.5",
         ],
     )
     init_manager.save(

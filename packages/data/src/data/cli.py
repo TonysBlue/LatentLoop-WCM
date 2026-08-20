@@ -167,10 +167,10 @@ def main(argv: list[str] | None = None) -> int:
             report = {
                 "parameters": model.parameter_count(),
                 "tokens_per_unit": config.model.tokens_per_unit,
-                "max_kv_tokens": (
-                    config.model.temporal_kv_units * (config.model.audio_tokens + 2)
-                    + config.model.vision_kv_units * config.model.vision_tokens
-                ),
+                "perceiver_slots": config.model.perceiver_slots,
+                "perceiver_layers": config.model.perceiver_layers,
+                "predictor_layers": config.model.predictor_layers,
+                "max_kv_tokens": config.model.kv_units * config.model.perceiver_slots,
             }
         elif args.command == "generate-data":
             output = args.output or str(config.runtime.data_path() / "generated" / "train-%06d.tar")

@@ -14,6 +14,11 @@ class FactorizedSpeechHead(nn.Module):
         super().__init__()
         dim = config.model_dim
         self.config = config
+        self.query = nn.Parameter(torch.zeros(1, dim))
+        self.query_attention = nn.MultiheadAttention(
+            dim, config.speech_depth_heads, dropout=config.dropout, batch_first=True
+        )
+        self.query_norm = nn.LayerNorm(dim)
         self.temporal = nn.GRUCell(dim, dim)
         self.mode = nn.Linear(dim, 2)
         self.depth_embeddings = nn.ModuleList(
@@ -39,9 +44,14 @@ class FactorizedSpeechHead(nn.Module):
         )
         nn.init.normal_(self.bos, std=0.02)
         nn.init.normal_(self.positions, std=0.02)
+        nn.init.normal_(self.query, std=0.02)
 
-    def update_temporal(self, hidden: Tensor, state: SpeechLocalState) -> Tensor:
-        query = hidden[:, -1]
+    def context(self, hidden: Tensor) -> Tensor:
+        query = self.query[None].expand(hidden.shape[0], -1, -1)
+        context, _ = self.query_attention(query, hidden, hidden, need_weights=False)
+        return self.query_norm(context[:, 0])
+
+    def update_temporal(self, context: Tensor, state: SpeechLocalState) -> Tensor:
         active = state.previous_codes.ne(0).any(dim=-1, keepdim=True)
         previous = torch.stack(
             [
@@ -52,10 +62,10 @@ class FactorizedSpeechHead(nn.Module):
         ).mean(dim=1)
         previous = torch.where(active, previous, torch.zeros_like(previous))
         previous_state = torch.where(active, state.temporal, torch.zeros_like(state.temporal))
-        return self.temporal(query + previous, previous_state)
+        return self.temporal(context + previous, previous_state)
 
-    def mode_logits(self, hidden: Tensor) -> Tensor:
-        return self.mode(hidden[:, -1])
+    def mode_logits(self, context: Tensor) -> Tensor:
+        return self.mode(context)
 
     def _inputs(self, temporal: Tensor, previous: list[Tensor]) -> Tensor:
         batch = temporal.shape[0]

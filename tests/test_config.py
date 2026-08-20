@@ -7,7 +7,8 @@ from runtime.config import load_config
 def test_load_config_with_override() -> None:
     config = load_config("configs/smoke.yaml", ["model.latent_slots=6"])
     assert config.model.latent_slots == 6
-    assert config.model.tokens_per_unit == config.model.audio_tokens + 18
+    assert config.model.tokens_per_unit == config.model.perceiver_slots == 16
+    assert config.model.perceiver_layers == config.model.predictor_layers == 2
     assert config.data.unit_ms == 80
     assert config.data.codec_frame_rate == 12.5
     assert config.model.delta_time_fourier_bands == 8
@@ -21,6 +22,26 @@ def test_world_state_and_delta_time_configuration_is_bounded() -> None:
         load_config("configs/smoke.yaml", ["model.delta_time_fourier_bands=0"])
     with pytest.raises(ValueError, match="base period"):
         load_config("configs/smoke.yaml", ["model.delta_time_base_period_ms=0"])
+    with pytest.raises(ValueError, match="16 slots"):
+        load_config("configs/smoke.yaml", ["model.perceiver_slots=8"])
+
+
+def test_stage_jepa_weights_are_fixed() -> None:
+    pretrain = load_config("configs/stages/smoke-pretrain.yaml")
+    sft = load_config("configs/stages/smoke-sft.yaml")
+    rl = load_config("configs/stages/smoke-rl.yaml")
+
+    assert pretrain.training.jepa_loss_weight == 1.0
+    assert sft.training.jepa_loss_weight == 0.5
+    assert rl.training.rl.on_policy_jepa_coef == 0.1
+    assert rl.training.rl.replay_jepa_coef == 0.1
+    with pytest.raises(ValueError, match="jepa_loss_weight=1.0"):
+        load_config("configs/smoke.yaml", ["training.jepa_loss_weight=0.5"])
+    with pytest.raises(ValueError, match="both JEPA coefficients"):
+        load_config(
+            "configs/stages/smoke-rl.yaml",
+            ["training.rl.on_policy_jepa_coef=0.2"],
+        )
 
 
 def test_local_dev_and_production_profiles_are_explicit() -> None:

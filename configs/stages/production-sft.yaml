@@ -3,6 +3,7 @@ defaults:
   - _self_
 training:
   stage: sft
+  jepa_loss_weight: 0.5
   max_updates: 60000
   backbone_train_mode: all
 runtime:

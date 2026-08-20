@@ -35,27 +35,27 @@ def test_static_and_dynamic_frames_use_the_same_visual_path(smoke_config) -> Non
     assert not torch.equal(static_tokens, dynamic_tokens)
 
 
-def test_unit_token_layout_contains_all_visual_positions(smoke_config) -> None:
-    assert smoke_config.model.tokens_per_unit == smoke_config.model.audio_tokens + 18
+def test_perceiver_is_the_only_backbone_token_layout(smoke_config) -> None:
+    assert smoke_config.model.tokens_per_unit == smoke_config.model.perceiver_slots == 16
 
 
-def test_action_head_consumes_backbone_visual_hidden(smoke_config) -> None:
+def test_action_head_queries_complete_backbone_hidden(smoke_config) -> None:
     model = StreamingLatentLoop(smoke_config.model)
     episode = SyntheticEpisodeDataset(smoke_config.data, smoke_config.model).make_episode(0)
     state = model.initial_state(1, "cpu")
     output = model(episode.units[0], state)
 
     assert output.hidden.shape[1] == smoke_config.model.tokens_per_unit
-    assert model.action_head.visual_attention is not None
+    assert model.action_head.state_query.shape == (1, smoke_config.model.model_dim)
+    assert model.action_head.spatial_queries.shape == (16, smoke_config.model.model_dim)
     output.action.kind_logits.sum().backward()
-    assert model.action_head.visual_attention.query_proj.weight.grad is not None
+    assert model.action_head.query_attention.in_proj_weight.grad is not None
     assert model.vision_encoder.encoder[0].weight.grad is not None
 
 
-def test_visual_and_temporal_kv_horizons_are_independent(smoke_config) -> None:
-    assert smoke_config.model.temporal_kv_units == 4
-    assert smoke_config.model.vision_kv_units == 2
-    assert smoke_config.model.temporal_kv_units != smoke_config.model.vision_kv_units
+def test_kv_horizon_is_unified_over_perceiver_slots(smoke_config) -> None:
+    assert smoke_config.model.kv_units == 4
+    assert smoke_config.model.kv_units * smoke_config.model.perceiver_slots == 64
 
 
 def test_action_cell_mapping_uses_four_by_four_visual_positions(smoke_config) -> None:

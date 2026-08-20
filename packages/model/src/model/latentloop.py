@@ -8,6 +8,7 @@ from torch.utils.checkpoint import checkpoint
 from model.action import ActionHead
 from model.attention import StreamingTransformerLayer
 from model.encoders import DeltaTimeEncoder, StreamingAudioEncoder, VisionEncoder
+from model.perceiver import Perceiver, PredictionAdapter, Predictor
 from model.speech import FactorizedSpeechHead
 from model.types import (
     ActionFrame,
@@ -74,8 +75,26 @@ class StreamingLatentLoop(nn.Module):
             bands=config.delta_time_fourier_bands,
             base_period_ms=config.delta_time_base_period_ms,
         )
-        self.type_embedding = nn.Embedding(4, dim)
-        self.state_query = nn.Parameter(torch.zeros(dim))
+        self.type_embedding = nn.Embedding(3, dim)
+        self.perceiver = Perceiver(
+            dim,
+            config.num_heads,
+            config.ffn_dim,
+            config.perceiver_slots,
+            config.perceiver_layers,
+            config.dropout,
+        )
+        self.predictor = Predictor(
+            dim,
+            config.latent_dim,
+            config.num_heads,
+            config.ffn_dim,
+            config.perceiver_slots,
+            config.predictor_layers,
+            config.dropout,
+        )
+        self.prediction_adapter = PredictionAdapter(dim)
+        self.future_embedding = nn.Parameter(torch.zeros(config.perceiver_slots, dim))
         self.latent_reader = nn.Linear(config.latent_dim, dim)
         self.layers = nn.ModuleList(
             StreamingTransformerLayer(
@@ -83,7 +102,7 @@ class StreamingLatentLoop(nn.Module):
                 heads=config.num_heads,
                 ffn_dim=config.ffn_dim,
                 dropout=config.dropout,
-                cross_latent=(index + 1) % config.cross_attention_every == 0,
+                cross_world=(index + 1) % config.cross_attention_every == 0,
             )
             for index in range(config.num_layers)
         )
@@ -93,11 +112,11 @@ class StreamingLatentLoop(nn.Module):
         )
         self.speech_head = FactorizedSpeechHead(config)
         self.action_head = ActionHead(config)
-        self.value_head = ValueHead(config.model_dim, config.latent_dim)
+        self.value_head = ValueHead(config.model_dim, config.latent_dim, config.num_heads)
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        nn.init.normal_(self.state_query, std=0.02)
+        nn.init.normal_(self.future_embedding, std=0.02)
 
     def initial_state(self, batch_size: int, device: torch.device | str) -> RecurrentState:
         dtype = next(self.parameters()).dtype
@@ -111,7 +130,6 @@ class StreamingLatentLoop(nn.Module):
                 value=torch.empty(
                     batch_size, self.config.num_heads, 0, head_dim, device=device, dtype=dtype
                 ),
-                is_visual=torch.empty(0, device=device, dtype=torch.bool),
             )
             for _ in self.layers
         )
@@ -129,7 +147,7 @@ class StreamingLatentLoop(nn.Module):
             ),
             hidden=torch.zeros(
                 batch_size,
-                self.config.tokens_per_unit,
+                self.config.perceiver_slots,
                 self.config.model_dim,
                 device=device,
                 dtype=dtype,
@@ -144,16 +162,20 @@ class StreamingLatentLoop(nn.Module):
             unit_index=torch.zeros(batch_size, device=device, dtype=torch.long),
         )
 
-    def _pack_unit(
-        self, unit: StreamUnit, audio: Tensor, vision: Tensor, delta_time: Tensor
-    ) -> Tensor:
-        time = delta_time
-        query = self.state_query[None, None].expand(unit.batch_size, -1, -1)
-        time = time + self.type_embedding.weight[0]
-        audio = audio + self.type_embedding.weight[1]
-        vision = vision + self.type_embedding.weight[2]
-        query = query + self.type_embedding.weight[3]
-        return torch.cat((time, audio, vision, query), dim=1)
+    def encode_observation(self, unit: StreamUnit, audio_cache: Tensor) -> tuple[Tensor, Tensor]:
+        """Encode an observation without advancing any cognitive recurrent state."""
+        audio, next_audio_cache = self.audio_encoder(unit.mic_audio, audio_cache)
+        vision = self.vision_encoder(unit.screen)
+        delta_time = self.delta_time_encoder(unit.delta_ms)
+        inputs = torch.cat(
+            (
+                delta_time + self.type_embedding.weight[0],
+                audio + self.type_embedding.weight[1],
+                vision + self.type_embedding.weight[2],
+            ),
+            dim=1,
+        )
+        return self.perceiver(inputs), next_audio_cache
 
     def forward_step(
         self,
@@ -166,65 +188,59 @@ class StreamingLatentLoop(nn.Module):
         action_teacher_mask: Tensor | None = None,
         sampling: SpeechSamplingConfig | None = None,
     ) -> StepOutput:
-        audio, audio_cache = self.audio_encoder(unit.mic_audio, state.audio_cache)
-        vision = self.vision_encoder(unit.screen)
+        perceived, audio_cache = self.encode_observation(unit, state.audio_cache)
         updated_latent = self.world_state_update(state.latent, state.hidden)
-        delta_time = self.delta_time_encoder(unit.delta_ms)
-        encoded = self._pack_unit(unit, audio, vision, delta_time)
-        latent_for_read = self.latent_reader(updated_latent)
+        predicted_next = self.predictor(perceived, updated_latent)
+        future = self.prediction_adapter(predicted_next.detach()) + self.future_embedding[None]
+        world = self.latent_reader(updated_latent)
         new_caches: list[LayerKV] = []
-        temporal_tokens = self.config.temporal_kv_units * (self.config.audio_tokens + 2)
-        visual_tokens = self.config.vision_kv_units * self.config.vision_tokens
-        current_is_visual = torch.zeros(
-            self.config.tokens_per_unit, dtype=torch.bool, device=encoded.device
-        )
-        visual_start = 1 + self.config.audio_tokens
-        current_is_visual[visual_start : visual_start + self.config.vision_tokens] = True
-        hidden = encoded
+        gates: list[Tensor] = []
+        max_kv_tokens = self.config.kv_units * self.config.perceiver_slots
+        hidden = perceived
         for layer, cache in zip(self.layers, state.layer_kv, strict=True):
             if self.training and self.config.activation_checkpointing:
 
                 def layer_forward(
                     current: Tensor,
-                    latent: Tensor,
+                    current_world: Tensor,
+                    current_future: Tensor,
                     key: Tensor,
                     value: Tensor,
-                    cached_is_visual: Tensor,
                     layer: StreamingTransformerLayer = layer,
                 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-                    output, updated = layer(
+                    output, updated, gate = layer(
                         current,
-                        latent,
-                        LayerKV(key, value, cached_is_visual),
-                        current_is_visual,
-                        temporal_tokens,
-                        visual_tokens,
+                        current_world,
+                        current_future,
+                        LayerKV(key, value),
+                        max_kv_tokens,
                     )
-                    return output, updated.key, updated.value, updated.is_visual
+                    return output, updated.key, updated.value, gate
 
-                hidden, key, value, is_visual = checkpoint(
+                hidden, key, value, gate = checkpoint(
                     layer_forward,
                     hidden,
-                    latent_for_read,
+                    world,
+                    future,
                     cache.key,
                     cache.value,
-                    cache.is_visual,
                     use_reentrant=False,
                 )
-                new_cache = LayerKV(key, value, is_visual)
+                new_cache = LayerKV(key, value)
             else:
-                hidden, new_cache = layer(
+                hidden, new_cache, gate = layer(
                     hidden,
-                    latent_for_read,
+                    world,
+                    future,
                     cache,
-                    current_is_visual,
-                    temporal_tokens,
-                    visual_tokens,
+                    max_kv_tokens,
                 )
             new_caches.append(new_cache)
+            gates.append(gate)
         hidden = self.final_norm(hidden)
-        speech_temporal = self.speech_head.update_temporal(hidden, state.speech_local)
-        speech_mode_logits = self.speech_head.mode_logits(hidden)
+        speech_context = self.speech_head.context(hidden)
+        speech_temporal = self.speech_head.update_temporal(speech_context, state.speech_local)
+        speech_mode_logits = self.speech_head.mode_logits(speech_context)
         if speech_teacher_mode is not None:
             mode = speech_teacher_mode
         elif sampling is not None and not sampling.greedy and sampling.temperature > 0:
@@ -268,6 +284,10 @@ class StreamingLatentLoop(nn.Module):
             speech_codec_logits=speech_codec_logits,
             action=action,
             hidden=hidden,
+            perceiver_slots=perceived,
+            predicted_next_slots=predicted_next,
+            future_gate_mean=torch.stack([gate.mean() for gate in gates]).mean(),
+            future_gate_max=torch.stack([gate.max() for gate in gates]).max(),
             value=self.value_head(hidden, updated_latent),
             selected_speech_mode=mode,
         )

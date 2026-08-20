@@ -1,7 +1,7 @@
 # LatentLoop 本地训练平台与工程实施方案
 
 > 状态：最终目标工程契约
-> 日期：2026-08-08
+> 日期：2026-08-20
 > 关联顶层架构：[实时流多模态 LatentLoop 完整方案](realtime-multimodal-latent-loop.md)
 > 输出协议：[直接流式语音实施说明](direct-speech.md) · [统一电脑动作输出协议](unified-action.md)
 > 训练协议：[统一三阶段训练架构](three-stage-training.md) · [Online RL：Online Recurrent PPO 与真实隔离电脑环境](online-recurrent-ppo-training.md)
@@ -12,9 +12,11 @@
 本地平台直接实现顶层架构，不维护语义不同的过渡 head 或阶段专用训练循环：
 
 ```text
-InputEncoder
+Perceiver(O_t) -> P_t
 -> Z_t = WorldStateUpdate(Z_(t-1), H_(t-1))
--> H_t, KV_t = Backbone(E_t, KV_(t-1), Z_t)
+-> P_hat_(t+1|t) = Predictor(P_t, Z_t)
+-> F_t = PredictionAdapter(stop_grad(P_hat)) + E_future
+-> H_t, KV_t = Backbone(P_t, Z_t, F_t, KV_(t-1))
 -> Speech Head + Unified Action Head
 -> masked loss + TBPTT
 -> atomic checkpoint + lineage
@@ -148,14 +150,17 @@ class StreamUnit:
 ### 5.3 编码和状态顺序
 
 ```text
-E_t       = InputEncoder(U_t)
-Z_t       = WorldStateUpdate(Z_(t-1), H_(t-1))
-H_t, KV_t = Backbone(E_t, KV_(t-1), Z_t)
-Speech_t  = SpeechHead(H_t, speech_local_(t-1))
-Action_t  = ActionHead(H_t, action_local_(t-1))
+P_t                 = Perceiver(O_t)
+Z_t                 = WorldStateUpdate(Z_(t-1), H_(t-1))
+P_hat_(t+1|t)       = Predictor(P_t, Z_t)
+F_t                 = PredictionAdapter(stop_grad(P_hat_(t+1|t))) + E_future
+H_t, KV_t           = Backbone(P_t, Z_t, F_t, KV_(t-1))
+Speech_t            = SpeechHead(H_t, speech_local_(t-1))
+Action_t            = ActionHead(H_t, action_local_(t-1))
 ```
 
-`H_t` 保存完整 `[B,tokens_per_unit,model_dim]`，不能只保存 state query。
+`P_t` 和 `H_t` 都保存16个 slots，H_t 不能被 pooled summary 替代。audio cache 是
+Perceiver 流式输入状态，不进入顶层认知状态公式。
 
 ### 5.4 Codec 时间对齐
 
@@ -189,6 +194,10 @@ class StepOutput:
     speech_codec_logits: Tensor
     action: ActionHeadOutput
     hidden: Tensor
+    perceiver_slots: Tensor
+    predicted_next_slots: Tensor
+    future_gate_mean: Tensor
+    future_gate_max: Tensor
 ```
 
 forward 不执行操作系统动作、W&B 网络调用或全局 session 读取。
@@ -216,19 +225,33 @@ weight_sha256
 
 ```text
 MIC_MIXED + SCREEN + TIME
-        -> InputEncoder(E_t)
+        -> Perceiver(P_t)
 Z_(t-1) + H_(t-1)
         -> WorldStateUpdate -> Z_t
-E_t + KV_(t-1) + Z_t
+P_t + Z_t
+        -> Predictor -> P_hat_(t+1|t)
+stop_grad(P_hat)
+        -> PredictionAdapter -> F_t
+P_t + Z_t + F_t + KV_(t-1)
         -> Streaming Backbone -> H_t, KV_t
 H_t -> Speech Head + Unified Action Head
 ```
 
 ### 7.2 Streaming Backbone
 
-每层执行 causal self-attention、周期性 latent cross-attention、feed-forward 和 final normalization。
-非视觉 token 保留最近 750 个 unit，视觉 token 保留最近 100 个 unit；两类 token 独立淘汰，
-保留后仍按原始时间顺序参与 attention。
+每层执行 cached self-attention、周期性 World cross-attention、门控 Future cross-attention、
+feed-forward 和 final normalization。同一 unit 的16个 slots双向互见，只读取历史 unit KV。
+KV 不区分视觉和非视觉，统一保留最近 `kv_units * 16` 个当前 slots；Z/F 不作为额外 token
+直接写入 KV。
+
+所有 profile 固定 `perceiver_slots=16`、`perceiver_layers=2`、`predictor_layers=2`；
+Smoke 只缩小 model_dim、Backbone layers、KV horizon 和数据预算，不改变 JEPA 模块拓扑。
+Perceiver 以16个 learned queries 两次执行 input cross-attention、slot self-attention 和 FFN。
+Predictor 以 P_t 为固定顺序 slots，通过 Z cross-attention 预测一个80 ms后的同形表示。
+
+Future Adapter 使用 `LayerNorm -> identity-initialized Linear`。每个 Future 层根据当前 hidden
+和 cross-attention context 生成 `[B,16,1]` gate；gate projection 零初始化且 bias 为 -4。
+行为梯度在 P_hat 后停止，因此训练 Adapter/Gate 而不进入 Predictor。
 
 ### 7.3 WorldStateUpdate
 
@@ -344,12 +367,14 @@ optimizer、学习率、梯度累积、FP16、梯度裁剪和 checkpoint cadence
 ```text
 L_speech = L_speech_mode + L_speech_codec
 L_action = masked_structured_action_nll(action_output, action_frame)
+L_JEPA   = normalized_slot_prediction + latent_variance_floor
 L_total  = speech_weight * L_speech + action_weight * L_action
+           + stage_jepa_weight * L_JEPA
 ```
 
 SILENCE unit 的 codec loss 被 mask。Action 参数按 kind 激活，连续参数 NLL 与 rollout
-log-prob 使用同一 bounded 参数化。没有 memory probe、future auxiliary、write-budget、
-diversity、control 或 confidence loss。
+log-prob 使用同一 bounded 参数化。Z 没有 memory probe、write-budget、diversity、control
+或 confidence loss；JEPA 是 Predictor 的单步表示目标，不是 Z 的独立 memory target。
 
 ### 10.4 梯度与模块影响
 
@@ -357,8 +382,11 @@ diversity、control 或 confidence loss。
 |---|---|---|
 | Speech Head | mode/codec loss | speech mode、codec 和局部连续性 |
 | Action Head | structured frame NLL | kind、参数、TYPE continuation |
-| Backbone | Speech + Action loss | 共享多模态表示 |
-| WorldStateUpdate/Z | 未来 Speech/Action loss | 长期目标、约束和抽象任务状态 |
+| Perceiver | Speech、Action/RL、JEPA source | 多模态观察表示 |
+| Predictor | JEPA | 单步未来表示 |
+| Future Adapter/Gate | Speech、Action/RL | 受控未来先验 |
+| Backbone | Speech、Action/RL | 共享多模态表示 |
+| WorldStateUpdate/Z | 未来行为 loss 与 JEPA source | 长期目标、约束和抽象任务状态 |
 | KV | 无参数 loss | 近期精确上下文 |
 | speech/action local | 对应 head loss | 跨帧/跨 unit 连续性 |
 
@@ -372,6 +400,13 @@ future Speech/Action loss
 ```
 
 TBPTT 不能短于要验证的 memory horizon；生产使用 750 units。
+
+### 10.6 Lookahead 与参数版本
+
+chunk 内 P_(t+1) 同时作为下一时刻正常可微 source 和上一时刻 detach target。chunk 最后
+一个 source 若还有 successor，只调用同一 Perceiver 编码 O_(t+1) 和 audio cache 副本；
+不更新 Z/H/KV 并丢弃新 cache。完整梯度累积周期使用同一参数版本，只有 sync 边界执行
+optimizer step；模型 unit index 不能被当作 optimizer version。
 
 ## 11. Checkpoint 与恢复
 
@@ -476,11 +511,13 @@ TYPE 跨 unit continuation、session/unit 顺序和 Harness safety gate 通过�
 ```text
 chronological WebDataset episodes
 -> StreamUnit(80 ms mixed mic + screen)
--> InputEncoder
+-> Perceiver(O_t) = P_t
 -> Z_t = WorldStateUpdate(Z_(t-1), H_(t-1))
--> H_t, KV_t = Backbone(E_t, KV_(t-1), Z_t)
+-> Predictor(P_t, Z_t) = P_hat_(t+1|t)
+-> PredictionAdapter(stop_grad(P_hat_(t+1|t))) + E_future = F_t
+-> H_t, KV_t = Backbone(P_t, Z_t, F_t, KV_(t-1))
 -> Speech Head + Unified Action Head
--> masked Speech/Action loss + TBPTT
+-> masked Speech/Action/JEPA loss + TBPTT
 -> atomic checkpoint + W&B lineage
 ```
 

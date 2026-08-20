@@ -60,6 +60,7 @@ def load_evaluation_model(
         raise ValueError("evaluation requires a complete current checkpoint")
     metadata = payload.get("metadata", {})
     for field, expected in (
+        ("architecture_id", config.model.architecture_id),
         ("codec_id", config.data.codec_id),
         ("codec_weight_hash", config.data.codec_weight_hash),
         ("codec_revision", config.data.codec_revision),

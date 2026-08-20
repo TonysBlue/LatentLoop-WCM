@@ -34,6 +34,7 @@ def test_smoke_training_and_atomic_checkpoint(smoke_config: ProjectConfig) -> No
     checkpoints = sorted(checkpoint_dir.glob("step-*.pt"))
     assert result["train_state"]["update"] == smoke_config.training.max_updates
     assert "train/loss_total" in result["metrics"]
+    assert "train/loss_jepa" in result["metrics"]
     assert result["metrics"]["runtime/elapsed_seconds"] > 0
     assert result["metrics"]["runtime/units_per_second"] > 0
     assert result["tracking"]["requested_mode"] == smoke_config.tracking.mode

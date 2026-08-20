@@ -53,22 +53,6 @@ def _pending_from_state(state: ActionLocalState, index: int) -> bytes:
     return bytes(int(value) for value in state.pending_utf8_bytes[index, :length].tolist())
 
 
-class _VisualContext(nn.Module):
-    def __init__(self, dim: int) -> None:
-        super().__init__()
-        self.query_proj = nn.Linear(dim, dim, bias=False)
-        self.key_proj = nn.Linear(dim, dim, bias=False)
-        self.value_proj = nn.Linear(dim, dim, bias=False)
-        self.norm = nn.LayerNorm(dim)
-
-    def forward(self, query: Tensor, visual: Tensor) -> Tensor:
-        q = self.query_proj(query)[:, None]
-        k = self.key_proj(visual)
-        v = self.value_proj(visual)
-        weights = torch.softmax((q * k).sum(dim=-1) / (query.shape[-1] ** 0.5), dim=-1)
-        return self.norm((weights[:, :, None] * v).sum(dim=1))
-
-
 class ActionHead(nn.Module):
     """One kind-conditioned structured action distribution per stream unit."""
 
@@ -77,7 +61,12 @@ class ActionHead(nn.Module):
         dim = config.model_dim
         self.kind_count = len(ActionKind)
         self.context = nn.Sequential(nn.Linear(dim * 2, dim), nn.GELU(), nn.Linear(dim, dim))
-        self.visual_attention = _VisualContext(dim)
+        self.state_query = nn.Parameter(torch.zeros(1, dim))
+        self.spatial_queries = nn.Parameter(torch.zeros(16, dim))
+        self.query_attention = nn.MultiheadAttention(
+            dim, config.num_heads, dropout=config.dropout, batch_first=True
+        )
+        self.query_norm = nn.LayerNorm(dim)
         self.visual_grid_size = 4
         self.local_coordinate_grid_size = 8
         self.kind_output = nn.Linear(dim, self.kind_count)
@@ -108,6 +97,8 @@ class ActionHead(nn.Module):
         self.hotkey_output = nn.Linear(dim, KEY_VOCAB_SIZE)
         self.type_bytes_per_unit = config.action_type_bytes_per_unit
         self.hotkey_keys_per_unit = config.action_hotkey_keys_per_unit
+        nn.init.normal_(self.state_query, std=0.02)
+        nn.init.normal_(self.spatial_queries, std=0.02)
 
     def initial_state(
         self, batch: int, device: torch.device, dtype: torch.dtype
@@ -283,11 +274,14 @@ class ActionHead(nn.Module):
         teacher_mask: Tensor | None = None,
         sampling_temperature: float | None = None,
     ) -> tuple[ActionHeadOutput, ActionLocalState]:
-        state_query = hidden[:, -1]
-        visual_hidden = hidden[:, -(self.visual_grid_size**2 + 1) : -1]
-        visual_context = self.visual_attention(state_query, visual_hidden)
+        queries = torch.cat((self.state_query, self.spatial_queries), dim=0)
+        queries = queries[None].expand(hidden.shape[0], -1, -1)
+        queried, _ = self.query_attention(queries, hidden, hidden, need_weights=False)
+        queried = self.query_norm(queried)
+        state_query = queried[:, 0]
+        spatial_hidden = queried[:, 1:]
         recurrent_context = torch.cat(
-            (state_query + visual_context, state.previous_frame_embedding), dim=-1
+            (state_query, state.previous_frame_embedding), dim=-1
         )
         context = torch.nan_to_num(
             self.context(recurrent_context),
@@ -319,7 +313,7 @@ class ActionHead(nn.Module):
 
         position_context = context[:, None].expand(-1, self.visual_grid_size**2, -1)
         local_cell_logits = self.coordinate_cell_output(
-            torch.cat((position_context, visual_hidden), dim=-1)
+            torch.cat((position_context, spatial_hidden), dim=-1)
         )
         cell_logits = (
             local_cell_logits.view(
@@ -344,11 +338,11 @@ class ActionHead(nn.Module):
         visual_index = (cell_y // self.local_coordinate_grid_size) * self.visual_grid_size + (
             cell_x // self.local_coordinate_grid_size
         )
-        selected_visual = visual_hidden.gather(
-            1, visual_index[:, None, None].expand(-1, 1, visual_hidden.shape[-1])
+        selected_spatial = spatial_hidden.gather(
+            1, visual_index[:, None, None].expand(-1, 1, spatial_hidden.shape[-1])
         ).squeeze(1)
         coordinate_raw = self.coordinate_residual_output(
-            torch.cat((context, selected_visual), dim=-1)
+            torch.cat((context, selected_spatial), dim=-1)
         ).view(-1, 2, 2)
         coordinate_alpha, coordinate_beta = _beta_parameters(coordinate_raw)
         button_logits = torch.nan_to_num(

@@ -23,16 +23,8 @@ def test_recurrent_state_is_bounded_and_heads_receive_gradients(
         total = total + compute_losses(output, unit)["total"]
 
     assert output is not None
-    max_tokens = (
-        smoke_config.model.temporal_kv_units * (smoke_config.model.audio_tokens + 2)
-        + smoke_config.model.vision_kv_units * smoke_config.model.vision_tokens
-    )
+    max_tokens = smoke_config.model.kv_units * smoke_config.model.perceiver_slots
     assert all(cache.key.shape[2] == max_tokens for cache in state.layer_kv)
-    assert all(
-        cache.is_visual.sum().item()
-        == smoke_config.model.vision_kv_units * smoke_config.model.vision_tokens
-        for cache in state.layer_kv
-    )
     assert state.latent.shape == (
         1,
         smoke_config.model.latent_slots,
@@ -45,6 +37,8 @@ def test_recurrent_state_is_bounded_and_heads_receive_gradients(
     assert model.speech_head.depth_embeddings[0].weight.grad is not None
     assert model.action_head.kind_output.weight.grad is not None
     assert model.speech_head.mode.weight.grad is not None
+    assert output.perceiver_slots.shape == (1, 16, smoke_config.model.model_dim)
+    assert output.predicted_next_slots.shape == output.perceiver_slots.shape
     assert output.value.shape == (1,)
 
 

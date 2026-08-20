@@ -1,7 +1,7 @@
 # Online RL：Online Recurrent PPO 与真实隔离电脑环境
 
 > 状态：最终目标 Online RL 阶段、Online Recurrent PPO 算法与环境协议
-> 日期：2026-08-19
+> 日期：2026-08-20
 > 关联文档：[统一三阶段训练架构](three-stage-training.md) · [统一电脑动作输出协议](unified-action.md) · [物理 Rollout 闭环](protocols/physical-rollout.md)
 
 ## 1. 环境选择
@@ -106,6 +106,17 @@ SFT replay 与 candidate preservation gate 使用两份显式、锁定且互不�
 前者参与每个 PPO epoch 的梯度，后者只用于更新前后 loss ratio 门禁。正式运行不得从 RL train
 manifest 临时抽两条样本，也不得让 preservation 样本参与 optimizer。
 
+每个 trainable window 还捕获执行最后一个 U_t 后已经返回的 O_(end+1)，作为最后一个
+source 的 JEPA-only lookahead。sealed metadata 记录其 unit index 和 payload SHA-256。
+lookahead 不进入 PPO unit count、reward、advantage、old/reference log-prob 或 ratio；candidate
+从 window start state 重放到 O_end 后，仅用其 audio cache 副本执行 Perceiver target 编码，
+不推进 Z/H/KV。该 observation 后续仍按正常生命期顺序被 serving policy 消费，不能额外执行
+一次环境 action。
+
+每个 PPO epoch 同时计算两路 JEPA：sealed on-policy 连续 observation 学习当前物理交互，
+SFT replay 连续 episode 稳定通用表示。两路都使用 candidate 内唯一一份 Perceiver 参数，
+分别加权和记录；preservation manifest 只做行为门禁，不参与 JEPA 训练。
+
 ## 5. Recurrent PPO 数学目标
 
 使用时间折扣和 GAE：
@@ -142,7 +153,8 @@ $$
 
 $$
 L=L_{\mathrm{actor}}+c_vL_{\mathrm{value}}-c_HH(\pi)
-+\beta D_{KL}(\pi_\theta\|\pi_{SFT})+c_{SFT}L_{SFT}
++\beta D_{KL}(\pi_\theta\|\pi_{SFT})+0.1L_{SFT}
++0.1L_{JEPA,on-policy}+0.1L_{JEPA,replay}
 $$
 
 Value Head 是训练专用组件，不跨 Model Service 物理边界输出。Reward/Judge 输出全部
@@ -189,3 +201,8 @@ client，保留 Harness、环境与 codec session 供同一 checkpoint 恢复。
 - policy 只在 unit 边界切换，并完整继承该边界的 recurrent state，不 reset 或反事实重算；
 - 暂停后从同一 Harness session 恢复，next unit、policy/reference state 和 chain hash 连续；
 - Harness session 不存在、cursor 错位、timeline 被修改或 reference checkpoint hash 不符时拒绝恢复。
+- window lookahead 必须严格为 `end_unit+1` 且 payload hash 匹配；它不得改变 PPO 样本数、
+  reward、advantage 或 ratio；
+- on-policy/replay JEPA 分别产生有限 loss 和 Predictor 梯度，preservation episode 不得进入
+  optimizer；
+- 行为/RL 梯度在 predicted slots 后停止但继续训练 Future Adapter/Gate，JEPA target 侧无梯度。

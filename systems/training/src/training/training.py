@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import math
 import random
@@ -16,9 +17,10 @@ import numpy as np
 import torch
 from accelerate import Accelerator
 from contracts import ACTION_SCHEMA_ID, ObservationSignal
+from contracts.protocol import observation_to_payload
 from data import EpisodeShardReader, SyntheticEpisodeDataset
 from data.curation.readiness import check_readiness
-from model import StreamingLatentLoop, action_frame_log_prob, compute_losses
+from model import StreamingLatentLoop, action_frame_log_prob, compute_jepa_loss, compute_losses
 from model.types import ActionFrame, Episode, RecurrentState, SpeechSamplingConfig, StreamUnit
 from runtime.config import ProjectConfig
 
@@ -60,11 +62,51 @@ def _loss_denominators(units: Sequence[StreamUnit]) -> dict[str, float]:
     }
 
 
+def _sequence_jepa_loss(
+    model: StreamingLatentLoop,
+    outputs: Sequence[Any],
+    lookahead: StreamUnit | None,
+) -> tuple[dict[str, torch.Tensor], int]:
+    """Pair consecutive outputs and optionally encode one target-only successor."""
+    if not outputs:
+        raise ValueError("JEPA sequence requires at least one source output")
+    predicted = [output.predicted_next_slots for output in outputs[:-1]]
+    sources = [output.perceiver_slots for output in outputs[:-1]]
+    targets = [output.perceiver_slots for output in outputs[1:]]
+    if lookahead is not None:
+        target, _ = model.encode_observation(
+            lookahead,
+            outputs[-1].state.audio_cache.clone(),
+        )
+        predicted.append(outputs[-1].predicted_next_slots)
+        sources.append(outputs[-1].perceiver_slots)
+        targets.append(target)
+    if not predicted:
+        zero = outputs[0].predicted_next_slots.sum() * 0.0
+        return {"total": zero, "prediction": zero, "variance": zero}, 0
+    losses = compute_jepa_loss(
+        torch.stack(predicted),
+        torch.stack(sources),
+        torch.stack(targets),
+    )
+    pairs = sum(value.shape[0] for value in predicted)
+    return losses, pairs
+
+
 def _aggregate_update_metrics(
     records: list[dict[str, Any]], config: ProjectConfig
 ) -> dict[str, float]:
     """Aggregate losses and codec accuracy over chunks in one optimizer update."""
-    names = ("total", "speech", "speech_mode", "speech_codec", "action")
+    names = (
+        "total",
+        "speech",
+        "speech_mode",
+        "speech_codec",
+        "action",
+        "jepa",
+        "jepa_prediction",
+        "jepa_variance",
+    )
     metrics: dict[str, float] = {}
     for name in names:
         numerator = sum(item["losses"][name] for item in records)
@@ -157,6 +199,7 @@ def _checkpoint_metadata(
         codec_weight_hash=config.data.codec_weight_hash,
         git_commit=_git_commit(),
         codec_revision=config.data.codec_revision,
+        architecture_id=config.model.architecture_id,
         parent_sha256=parent_sha256,
         reference_checkpoint_sha256=reference_checkpoint_sha256,
         stage=config.training.stage,
@@ -376,6 +419,9 @@ def train(
                                 "speech_mode",
                                 "speech_codec",
                                 "action",
+                                "jepa",
+                                "jepa_prediction",
+                                "jepa_variance",
                             )
                         }
                         speech_correct = torch.zeros(
@@ -385,6 +431,7 @@ def train(
                         )
                         speech_valid = torch.zeros((), device=accelerator.device, dtype=torch.long)
                         output = None
+                        outputs: list[Any] = []
                         for unit in moved:
                             sampling_probability = scheduled_sampling_probability(
                                 train_state["update"], config
@@ -401,6 +448,7 @@ def train(
                                 action_teacher_mask=unit.action_supervision_mask,
                             )
                             recurrent = output.state
+                            outputs.append(output)
                             unit_losses = compute_losses(
                                 output,
                                 unit,
@@ -424,7 +472,34 @@ def train(
                                 dim=(0, 1)
                             )
                             speech_valid += valid[:, :, 0].sum()
+                        next_index = chunk_start + len(chunk)
+                        lookahead = (
+                            episode.units[next_index].to(accelerator.device)
+                            if next_index < len(episode.units)
+                            else None
+                        )
+                        jepa, jepa_pairs = _sequence_jepa_loss(
+                            accelerator.unwrap_model(model), outputs, lookahead
+                        )
                         losses = {name: value / len(moved) for name, value in chunk_losses.items()}
+                        losses["jepa"] = jepa["total"]
+                        losses["jepa_prediction"] = jepa["prediction"]
+                        losses["jepa_variance"] = jepa["variance"]
+                        losses["total"] = (
+                            losses["total"]
+                            + config.training.jepa_loss_weight * losses["jepa"]
+                        )
+                        for name, value in (
+                            ("jepa", jepa["total"]),
+                            ("jepa_prediction", jepa["prediction"]),
+                            ("jepa_variance", jepa["variance"]),
+                        ):
+                            chunk_numerators[name] = value * jepa_pairs
+                            chunk_denoms[name] = float(jepa_pairs)
+                        chunk_numerators["total"] = (
+                            chunk_numerators["total"]
+                            + config.training.jepa_loss_weight * jepa["total"] * len(moved)
+                        )
                         accelerator.backward(losses["total"])
                         if accelerator.sync_gradients:
                             accelerator.clip_grad_norm_(
@@ -630,6 +705,8 @@ def initialize_compatible_weights(model: StreamingLatentLoop, path: str | Path) 
     ):
         raise ValueError("initial checkpoint is incomplete")
     metadata = payload.get("metadata", {})
+    if metadata.get("architecture_id") != model.config.architecture_id:
+        raise ValueError("initial checkpoint architecture is incompatible")
     if metadata.get("action_schema_id") != ACTION_SCHEMA_ID:
         raise ValueError("initial checkpoint action schema is incompatible")
     source = payload.get("model")
@@ -649,6 +726,11 @@ def initialize_compatible_weights(model: StreamingLatentLoop, path: str | Path) 
 
 def initialize_exact_weights(model: StreamingLatentLoop, path: str | Path) -> None:
     payload = torch.load(Path(path), map_location="cpu", weights_only=False)
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        raise ValueError("initial checkpoint metadata is incomplete")
+    if metadata.get("architecture_id") != model.config.architecture_id:
+        raise ValueError("initial checkpoint architecture is incompatible")
     source = payload.get("model")
     if not isinstance(source, dict):
         raise ValueError("initial checkpoint does not contain a model state")
@@ -801,15 +883,19 @@ def _state_pending_utf8(state: RecurrentState) -> bytes:
     )
 
 
-def _supervised_episode_loss(
+def _supervised_episode_objectives(
     model: StreamingLatentLoop,
     episode: Episode,
     config: ProjectConfig,
     device: torch.device,
-) -> torch.Tensor:
+    *,
+    include_jepa: bool = True,
+) -> dict[str, torch.Tensor]:
     state = model.initial_state(1, device)
     losses: list[torch.Tensor] = []
-    for raw_unit in episode.units[: config.training.memory_horizon_units]:
+    outputs: list[Any] = []
+    selected_units = episode.units[: config.training.memory_horizon_units]
+    for raw_unit in selected_units:
         unit = raw_unit.to(device)
         output = model.forward_step(
             unit,
@@ -820,6 +906,7 @@ def _supervised_episode_loss(
             action_teacher_mask=unit.action_supervision_mask,
         )
         state = output.state
+        outputs.append(output)
         losses.append(
             compute_losses(
                 output,
@@ -830,7 +917,29 @@ def _supervised_episode_loss(
         )
     if not losses:
         raise RuntimeError("SFT preservation episode contains no units")
-    return torch.stack(losses).mean()
+    if include_jepa:
+        lookahead = (
+            episode.units[len(selected_units)].to(device)
+            if len(selected_units) < len(episode.units)
+            else None
+        )
+        jepa, _ = _sequence_jepa_loss(model, outputs, lookahead)
+    else:
+        zero = losses[0].sum() * 0.0
+        jepa = {"total": zero}
+    return {"behavior": torch.stack(losses).mean(), "jepa": jepa["total"]}
+
+
+def _supervised_episode_loss(
+    model: StreamingLatentLoop,
+    episode: Episode,
+    config: ProjectConfig,
+    device: torch.device,
+) -> torch.Tensor:
+    """Behavior-only objective used by the preservation acceptance gate."""
+    return _supervised_episode_objectives(
+        model, episode, config, device, include_jepa=False
+    )["behavior"]
 
 
 def _ppo_guard_episodes(config: ProjectConfig) -> tuple[Episode, Episode]:
@@ -858,6 +967,7 @@ def _train_ppo_candidate(
     serving: StreamingLatentLoop,
     optimizer_state: dict[str, Any],
     units: tuple[_PPOUnit, ...],
+    lookahead_observation: ObservationSignal,
     window_start_state: RecurrentState,
     rewards: tuple[float, ...],
     bootstrap_masks: tuple[float, ...],
@@ -908,11 +1018,14 @@ def _train_ppo_candidate(
     last_loss: torch.Tensor | None = None
     last_components: dict[str, torch.Tensor] = {}
     last_sft_replay_loss: torch.Tensor | None = None
+    last_on_policy_jepa: torch.Tensor | None = None
+    last_replay_jepa: torch.Tensor | None = None
     for _ in range(config.training.rl.ppo_epochs):
         state = window_start_state
         current_speech: list[torch.Tensor] = []
         current_action: list[torch.Tensor] = []
         current_values: list[torch.Tensor] = []
+        outputs: list[Any] = []
         for item in units:
             stream_unit = observation_to_stream_unit(item.observation, config).to(device)
             output = candidate.forward_step(
@@ -926,6 +1039,7 @@ def _train_ppo_candidate(
                 ),
             )
             state = output.state
+            outputs.append(output)
             speech_logprob, action_logprob = _policy_logprobs(
                 output,
                 item.mode.to(device),
@@ -979,13 +1093,27 @@ def _train_ppo_candidate(
             entropy=-0.5
             * (ppo_inputs["current_speech"] + ppo_inputs["current_action"]),
         )
-        sft_replay_loss = _supervised_episode_loss(
+        on_policy_jepa, _ = _sequence_jepa_loss(
+            candidate,
+            outputs,
+            observation_to_stream_unit(lookahead_observation, config).to(device),
+        )
+        replay_objectives = _supervised_episode_objectives(
             candidate, replay_episode, config, device
         )
-        loss = ppo_loss + config.training.rl.sft_replay_coef * sft_replay_loss
+        sft_replay_loss = replay_objectives["behavior"]
+        replay_jepa = replay_objectives["jepa"]
+        loss = (
+            ppo_loss
+            + config.training.rl.sft_replay_coef * sft_replay_loss
+            + config.training.rl.on_policy_jepa_coef * on_policy_jepa["total"]
+            + config.training.rl.replay_jepa_coef * replay_jepa
+        )
         diagnostic_tensors = {
             "total": loss,
             "sft_replay": sft_replay_loss,
+            "jepa_on_policy": on_policy_jepa["total"],
+            "jepa_replay": replay_jepa,
             **components,
         }
         invalid = [
@@ -1016,8 +1144,15 @@ def _train_ppo_candidate(
         last_loss = loss
         last_components = components
         last_sft_replay_loss = sft_replay_loss
+        last_on_policy_jepa = on_policy_jepa["total"]
+        last_replay_jepa = replay_jepa
 
-    assert last_loss is not None and last_sft_replay_loss is not None
+    assert (
+        last_loss is not None
+        and last_sft_replay_loss is not None
+        and last_on_policy_jepa is not None
+        and last_replay_jepa is not None
+    )
 
     with torch.no_grad():
         candidate_eval_loss = _supervised_episode_loss(
@@ -1062,6 +1197,8 @@ def _train_ppo_candidate(
         "train/loss_actor": float(last_components["actor"].detach().cpu()),
         "train/loss_value": float(last_components["value"].detach().cpu()),
         "train/loss_sft_replay": float(last_sft_replay_loss.detach().cpu()),
+        "train/loss_jepa_on_policy": float(last_on_policy_jepa.detach().cpu()),
+        "train/loss_jepa_replay": float(last_replay_jepa.detach().cpu()),
         "rl/candidate_reference_kl": float(post_reference_kl.cpu()),
         "rl/candidate_eval_loss_ratio": float(eval_ratio.cpu()),
         "rl/reward_mean": float(reward_tensor.mean().cpu()),
@@ -1406,6 +1543,7 @@ def train_online_ppo(
         if not units:
             return
         attempt = int(train_state["candidate_attempts"])
+        lookahead_hash = hashlib.sha256(observation_to_payload(observation)).hexdigest()
         window_store.seal(
             SealedRolloutWindow(
                 window_id=(
@@ -1424,6 +1562,8 @@ def train_online_ppo(
                 finalized_through_unit=finalized_through,
                 reward_event_ids=tuple(dict.fromkeys(reward_event_ids)),
                 consumed_units=len(units),
+                lookahead_unit_index=observation.unit_index,
+                lookahead_payload_sha256=lookahead_hash,
                 eligible_for_update=False,
                 disposition=disposition,
             )
@@ -1478,6 +1618,12 @@ def train_online_ppo(
                     units.append(item)
                     reward_event_ids.extend(event_ids)
                 window_end = units[-1].observation.unit_index
+                lookahead_observation = observation
+                if lookahead_observation.unit_index != window_end + 1:
+                    raise RuntimeError("PPO lookahead observation is not the immediate successor")
+                lookahead_payload_sha256 = hashlib.sha256(
+                    observation_to_payload(lookahead_observation)
+                ).hexdigest()
                 with torch.no_grad():
                     bootstrap_value = policy.forward_step(
                         observation_to_stream_unit(observation, config).to(device),
@@ -1513,6 +1659,8 @@ def train_online_ppo(
                         finalized_through_unit=finalized_through,
                         reward_event_ids=tuple(dict.fromkeys(reward_event_ids)),
                         consumed_units=len(units),
+                        lookahead_unit_index=lookahead_observation.unit_index,
+                        lookahead_payload_sha256=lookahead_payload_sha256,
                     )
                 )
                 rewards = tuple(
@@ -1532,6 +1680,7 @@ def train_online_ppo(
                     candidate_snapshot,
                     copy.deepcopy(optimizer.state_dict()),
                     tuple(units),
+                    lookahead_observation,
                     window_start_state,
                     rewards,
                     bootstrap_masks,

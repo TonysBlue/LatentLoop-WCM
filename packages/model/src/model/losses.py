@@ -17,6 +17,42 @@ def _masked_mean(values: Tensor, mask: Tensor) -> Tensor:
     return selected.sum() / weights.sum().clamp_min(1)
 
 
+def compute_jepa_loss(
+    predicted_next_slots: Tensor,
+    source_slots: Tensor,
+    target_slots: Tensor,
+    valid_mask: Tensor | None = None,
+) -> dict[str, Tensor]:
+    """Compute slot-aligned next-observation prediction and variance-floor losses."""
+    if not (
+        predicted_next_slots.shape == source_slots.shape == target_slots.shape
+        and predicted_next_slots.ndim >= 3
+    ):
+        raise ValueError("JEPA tensors must have matching [..., slots, dim] shapes")
+    sample_shape = predicted_next_slots.shape[:-2]
+    if valid_mask is None:
+        valid_mask = torch.ones(sample_shape, dtype=torch.bool, device=source_slots.device)
+    if valid_mask.shape != sample_shape:
+        raise ValueError("JEPA valid_mask must match the batch/time sample dimensions")
+    flat_mask = valid_mask.reshape(-1)
+    predicted = predicted_next_slots.reshape(-1, *predicted_next_slots.shape[-2:])[flat_mask]
+    source = source_slots.reshape(-1, *source_slots.shape[-2:])[flat_mask]
+    target = target_slots.reshape(-1, *target_slots.shape[-2:])[flat_mask]
+    if predicted.shape[0] == 0:
+        zero = predicted_next_slots.sum() * 0.0
+        return {"total": zero, "prediction": zero, "variance": zero}
+
+    predicted_normalized = F.normalize(predicted, dim=-1, eps=1e-4)
+    target_normalized = F.normalize(target.detach(), dim=-1, eps=1e-4)
+    prediction = (predicted_normalized - target_normalized).square().mean()
+    if source.shape[0] < 2:
+        variance = source.sum() * 0.0
+    else:
+        standard_deviation = torch.sqrt(source.var(dim=0, unbiased=False) + 1e-4)
+        variance = torch.relu(1.0 - standard_deviation).mean()
+    return {"total": prediction + variance, "prediction": prediction, "variance": variance}
+
+
 def structured_action_loss(output: StepOutput, target: StreamUnit) -> Tensor:
     components = action_log_prob_components(output.action, target.action)
     supervised = target.action_supervision_mask

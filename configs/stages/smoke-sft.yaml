@@ -7,6 +7,7 @@ data:
   train_episodes: 1
 training:
   stage: sft
+  jepa_loss_weight: 0.5
   max_updates: 1
   checkpoint_every: 1
 runtime:

@@ -20,6 +20,8 @@ class SealedRolloutWindow:
     finalized_through_unit: int
     reward_event_ids: tuple[str, ...]
     consumed_units: int
+    lookahead_unit_index: int
+    lookahead_payload_sha256: str
     eligible_for_update: bool = True
     disposition: str = "trainable"
 
@@ -37,6 +39,13 @@ class SealedRolloutWindow:
             raise ValueError("sealed PPO window unit range is invalid")
         if self.consumed_units != self.end_unit - self.start_unit + 1:
             raise ValueError("sealed PPO window unit count is invalid")
+        if self.lookahead_unit_index != self.end_unit + 1:
+            raise ValueError("sealed PPO window lookahead must be the immediate successor")
+        if len(self.lookahead_payload_sha256) != 64 or any(
+            character not in "0123456789abcdef"
+            for character in self.lookahead_payload_sha256
+        ):
+            raise ValueError("sealed PPO window lookahead payload hash is invalid")
         if not self.disposition:
             raise ValueError("sealed PPO window disposition is required")
         if self.eligible_for_update and self.disposition != "trainable":

@@ -1,7 +1,7 @@
 # 实时流多模态 LatentLoop 完整方案
 
 > 状态：项目顶层最终架构文档
-> 日期：2026-08-19
+> 日期：2026-08-20
 > 目标：构建持续接收真实混合麦克风和屏幕流、直接生成语音并控制电脑的 always-on 全双工多模态模型。
 > 专项协议：[直接流式语音实施说明](direct-speech.md) · [统一电脑动作输出协议](unified-action.md)
 > 训练协议：[统一三阶段训练架构](three-stage-training.md) · [Online RL：Online Recurrent PPO 与真实隔离电脑环境](online-recurrent-ppo-training.md)
@@ -30,41 +30,24 @@ readiness，不隶属于 Training System。
 
 实时流多模态 LatentLoop 是一个运行在真实环境反馈闭环中的递归多模态模型。模型以 80 ms 为一个统一时间单元，持续接收单路混合麦克风音频、屏幕输入和当前观察的时间间隔，通过有界逐层 KV Cache 保存近期精确历史，通过固定容量的抽象 latent workspace `Z_t` 保存长期任务状态，并使用独立 Speech Head 与 Unified Action Head 并行输出。`Z_t` 是模型内部的递归表示，不要求逐一对应真实世界的物理变量，也不要求遵循严格的连续时间动力学。
 
-完整闭环为：
-
-~~~
-单路混合麦克风 + 屏幕 + 时间
-              ↓
-       InputEncoder(U_t)
-              ↓
-    WorldStateUpdate(Z_(t-1), H_(t-1))
-              ↓
-   Backbone(E_t, KV_(t-1), Z_t)
-              ↓
-       完整 H_t 与 KV_t
-          ↙          ↘
-     Speech Head   Unified Action Head
-          ↓          ↓
-    Mimi codec     ActionFrame
-          ↓          ↓
-      扬声器       Harness / UI-TARS
-          ↘          ↙
-       真实声学与屏幕环境
-              ↓
-         下一 unit 输入
-~~~
-
 每个时间单元严格执行：
 
 ~~~
-E_t       = InputEncoder(U_t)
-Z_t       = WorldStateUpdate(Z_(t-1), H_(t-1))
-H_t, KV_t = Backbone(E_t, KV_(t-1), Z_t)
-speech_t  = SpeechHead(H_t, speech_local_(t-1))
-action_t  = ActionHead(H_t, action_local_(t-1))
+P_t                 = Perceiver(O_t)
+Z_t                 = WorldStateUpdate(Z_(t-1), H_(t-1))
+P_hat_(t+1|t)       = Predictor(P_t, Z_t)
+F_t                 = PredictionAdapter(stop_grad(P_hat_(t+1|t))) + E_future
+H_t, KV_t           = Backbone(P_t, Z_t, F_t, KV_(t-1))
+U_t                  = (
+                         SpeechHead(H_t, speech_local_(t-1)),
+                         ActionHead(H_t, action_local_(t-1))
+                       )
+O_(t+1)              = Environment(O_t, U_t)
 ~~~
 
-H_t 是主干经过 final normalization 后的完整 hidden 序列，必须暂存到下一单元；不存在额外的 r_t、q_t 或其它摘要状态。环境执行结果只通过下一 unit 的真实混合音频和屏幕输入返回模型。
+H_t 是主干经过 final normalization 后的完整 16-slot hidden 序列，必须暂存到下一单元；
+不存在独立 Reasoner。Predictor 的输出不是递归状态，Future slots 也不直接写入 KV。
+环境执行结果只通过下一 unit 的真实混合音频和屏幕输入返回模型，不存在显式 ActionEncoder。
 
 ## 2. 设计目标
 
@@ -80,6 +63,8 @@ H_t 是主干经过 final normalization 后的完整 hidden 序列，必须暂�
 10. 由 Harness 提供动作语法、安全和权限校验。
 11. Pretrain、SFT、Online RL（算法为 Online Recurrent PPO）使用同一双头模型和状态转移完整训练全模型；
     RL Value Head 仅用于 actor-critic 估值，不跨物理信号边界。
+12. 使用单参数 Perceiver 和 JEPA 单步目标学习可预测的观测表示，并通过门控 Future
+    cross-attention 为行为主干提供未来先验。
 
 ## 3. 输入与输出
 
@@ -144,8 +129,10 @@ parameters = kind-conditioned coordinate/button/scroll/text/key fields
 
 | 符号 | 含义 |
 |---|---|
-| U_t | 当前混合音频、屏幕和时间输入 |
-| E_t | InputEncoder(U_t) 的统一表示 |
+| O_t | 当前混合音频、屏幕和时间观测 |
+| P_t | Perceiver(O_t) 的 16 个多模态 slots |
+| P_hat_(t+1\|t) | Predictor 对下一时刻 Perceiver slots 的预测 |
+| F_t | stop-gradient 后经过适配的独立 Future slots |
 | KV_t | 有界逐层 Transformer Key/Value Cache |
 | Z_t | 固定容量抽象 latent workspace |
 | H_t | 当前 unit 的完整 final-normalized hidden |
@@ -154,7 +141,9 @@ parameters = kind-conditioned coordinate/button/scroll/text/key fields
 
 ### 4.1 KV Cache
 
-每层 KV 保存最近进入主干的音频、视觉、时间和状态位置。缓存按完整 unit 追加和淘汰，不能在 unit 中间截断。生产上限为 750 个 80 ms unit，即 60 秒。
+每层 KV 保存最近进入主干的 16 个 Perceiver slots。缓存按完整 unit 追加和淘汰，
+不能在 unit 中间截断。生产上限为 750 个 80 ms unit，即每层 12,000 tokens、60 秒。
+World slots 和 Future slots 不作为额外 token 直接写入 KV。
 
 ### 4.2 Latent memory
 
@@ -175,7 +164,7 @@ Z_t 的容量与运行时长无关，不承诺逐 token 复制历史。
 ### 4.3 完整 H_t
 
 $$
-H_t\in\mathbb R^{B\times tokens\_per\_unit\times d_{model}}
+H_t\in\mathbb R^{B\times 16\times d_{model}}
 $$
 
 H_t 是当前 unit 的完整主干输出，而不是单个 query 或 pooled summary。它必须保存在 RecurrentState.hidden，并作为下一时刻 WorldStateUpdate 的唯一 hidden 输入。
@@ -209,20 +198,21 @@ screen             [B, 3, 224, 224] float32
 
 delta_ms 必须为正，时间戳严格递增。
 
-### 5.2 主干序列
+### 5.2 Perceiver 输入与输出
 
-InputEncoder 将 unit 组织为带 type embedding 的统一序列：
+音频、视觉和时间 stem 先组织为带模态与位置编码的输入序列：
 
 ~~~
 <TIME>
 <AUDIO_0> ... <AUDIO_N>
 <VISION_0> ... <VISION_15>
-<STATE_QUERY>
 ~~~
 
-视觉编码器输出 4x4 空间特征并 reshape 为 16 个带二维位置编码的视觉 token。
-`tokens_per_unit` 为 `audio_tokens + 18`。STATE_QUERY 是主干序列中的一个位置；完整
-H_t 会保存给下一步 updater。静态和动态屏幕每个 unit 都走同一条编码路径。
+16 个 learned Perceiver queries 通过两层 `slot-to-input cross-attention -> slot
+self-attention -> FFN` 将该序列压缩为 `[B,16,model_dim]` 的 P_t。视觉 stem 仍输出
+4x4 空间特征，但 Perceiver slots 是混合模态高层表示，不再与视觉位置一一对应。所有
+观测必须经过 Perceiver，原始 stem token 不得绕过它进入 Backbone。静态和动态屏幕每个
+unit 都走同一条编码路径。
 
 ### 5.3 Codec 时间对齐
 
@@ -268,14 +258,17 @@ WorldStateUpdate，也不要求 `Z` 遵循物理时间动力学。
 
 ~~~
 MIC_MIXED --> Streaming Audio Encoder --┐
-SCREEN   --> Vision Encoder -----------+--> InputEncoder(E_t)
-DELTA_T  --> DeltaTimeEncoder ---------┘
-                                      |
-Z_(t-1), H_(t-1) --> WorldStateUpdate --> Z_t
-                                      |
-KV_(t-1), E_t, Z_t --> Backbone --> H_t, KV_t
+SCREEN   --> Vision Encoder -----------+--> Perceiver --> P_t
+DELTA_T  --> DeltaTimeEncoder ---------┘                 |
+                                                         +--> Predictor --> P_hat_(t+1|t)
+Z_(t-1), H_(t-1) --> WorldStateUpdate --> Z_t -----------+         |
+                                                                  stop_grad
+                                                                      |
+                                                        PredictionAdapter --> F_t
+                                                                      |
+KV_(t-1), P_t, Z_t, F_t --> Backbone --> H_t, KV_t
                                       |             |
-                               Speech Head   Unified Action Head
+                               Speech Head       Action Head
                                       |             |
                              Mimi waveform     ActionFrame
 ~~~
@@ -290,22 +283,54 @@ KV_(t-1), E_t, Z_t --> Backbone --> H_t, KV_t
 16 个 token 对应 4x4 空间网格并带可学习二维位置编码；不使用全局池化为单 token，也不
 区分静态和动态画面。缺失屏幕帧在输入适配器中变为全黑帧，仍按正常 unit 推进时间和状态。
 
-视觉 token 经过 Backbone 后才进入 Action Head。Action Head 读取 `H_t` 中的 STATE_QUERY
-hidden 和 16 个视觉位置 hidden，并通过统一 context 预测 ActionFrame；不存在
-VisionEncoder 到 ActionHead 的旁路。
+视觉 token 只作为 Perceiver 输入。Action Head 使用一个 learned state query 和 4x4 learned
+spatial queries cross-attend 完整 H_t，再预测 ActionFrame；它不能把 16 个混合模态
+Perceiver slots 当作屏幕网格，也不存在 VisionEncoder 到 ActionHead 的旁路。
 
-时间 KV 保留最近 750 个 unit（60 秒）；视觉位置 KV 单独保留最近 100 个 unit（8 秒）。
-两类 KV 都按 unit 顺序追加、按各自 horizon 淘汰，并由 checkpoint 和 TBPTT detach 一起维护。
+KV 不再区分视觉和非视觉类别。每层按 unit 顺序追加 16 个当前 slots，统一保留最近
+`kv_units` 个 unit，并由 checkpoint 和 TBPTT detach 一起维护。
 
 ### 6.3 多模态主干
 
 主干执行：
 
 $$
-H_t,KV_t=F_\theta(E_t,KV_{t-1},Z_t)
+H_t,KV_t=F_\theta(P_t,Z_t,F_t,KV_{t-1})
 $$
 
-每层包含 causal self-attention、周期性 latent cross-attention、feed-forward 和 normalization。Z_t 通过 latent projection/cross-attention 进入主干，不拼接为普通 token KV。
+同一 unit 的 16 个 slots 双向互见，只能读取历史 unit 的 KV。每层依次执行 cached
+self-attention、可选 World cross-attention、可选 gated Future cross-attention、feed-forward
+和 normalization。Z_t 通过独立投影/cross-attention 进入主干，不拼接为普通 token KV。
+
+Future 分支定义为：
+
+$$
+Q_t^{(l)}=\mathrm{LayerNorm}(H_t^{(l)}),\qquad
+C_t^{(l)}=\mathrm{FutureCrossAttention}(Q_t^{(l)},F_t,F_t)
+$$
+
+$$
+G_t^{(l)}=\sigma\left(W_g^{(l)}[Q_t^{(l)},C_t^{(l)}]+b_g^{(l)}\right)
+$$
+
+$$
+H_t^{(l)}\leftarrow H_t^{(l)}+G_t^{(l)}\odot C_t^{(l)}
+$$
+
+G 的形状为 `[B,16,1]`。W_g 零初始化、b_g 初始为 -4，使训练初期预测先验只以小残差
+进入主干。Gate 不重复直接读取 P_t 或 Z_t；当前 hidden 已经包含当前与 World 上下文。
+
+### 6.4 Predictor 与单参数 JEPA
+
+Predictor 读取 P_t 和 Z_t，以固定 slot 顺序预测一个 80 ms 后的 Perceiver 表示：
+
+$$
+\widehat P_{t+1|t}=\mathrm{Predictor}(P_t,Z_t)
+$$
+
+Perceiver 只有一份参数，不维护 EMA teacher。预测输出一方面以未截断形式参与 JEPA loss，
+另一方面在 stop-gradient 后经过 PredictionAdapter 和 learned future embedding 形成 F_t。
+行为 loss 因此训练 Adapter 和 Future Gate，但不会沿该分支进入 Predictor。
 
 ## 7. LatentLoop 状态更新
 
@@ -397,7 +422,7 @@ $$
 Y_t\rightarrow Playback\rightarrow Environment\rightarrow x_{t+\delta}^{mic}
 $$
 
-回流作为下一 unit 的混合音频重新进入 InputEncoder，不直接把 codec token 回灌主干。
+回流作为下一 unit 的混合音频重新进入 Perceiver，不直接把 codec token 回灌主干。
 
 ## 9. Unified Action Head 与 Harness
 
@@ -447,10 +472,11 @@ Harness control-plane 操作，不是模型 action kind。
 
 ## 11. 完整状态转移
 
-### 11.1 感知
+### 11.1 感知与预测
 
 $$
-E_t=InputEncoder(U_t)
+P_t=Perceiver(O_t),\qquad
+\widehat P_{t+1|t}=Predictor(P_t,Z_t)
 $$
 
 ### 11.2 记忆
@@ -462,17 +488,20 @@ $$
 ### 11.3 主干
 
 $$
-H_t,KV_t=Backbone(E_t,KV_{t-1},Z_t)
+F_t=PredictionAdapter(stop\_grad(\widehat P_{t+1|t}))+E_{future}
+$$
+
+$$
+H_t,KV_t=Backbone(P_t,Z_t,F_t,KV_{t-1})
 $$
 
 ### 11.4 输出
 
 $$
-speech_t=SpeechHead(H_t,speech\_local_{t-1})
-$$
-
-$$
-action_t=ActionHead(H_t,action\_local_{t-1})
+U_t=\left(
+SpeechHead(H_t,speech\_local_{t-1}),
+ActionHead(H_t,action\_local_{t-1})
+\right)
 $$
 
 ### 11.5 状态保存
@@ -483,20 +512,21 @@ $$
 
 ### 11.6 环境演化
 
-语音播放和 action 执行改变真实环境；其后续麦克风、屏幕和时间输入构成 U_(t+1)。模型不读取隐藏的执行成功标签。
+语音播放和 action 执行改变真实环境；其后续麦克风、屏幕和时间输入构成 O_(t+1)。
+模型不读取隐藏的执行成功标签，也不把 U_t 作为显式 Predictor 条件。
 
 ## 12. 上下文管理
 
 ### 12.1 有界 KV
 
-KV 按模态保留最近配置窗口：
+KV 统一保留最近配置窗口：
 
 ~~~
-KV_t = ordered_merge(TEMPORAL[t-749:t], VISUAL[t-99:t])
+KV_t = CURRENT_SLOTS[t-kv_units+1:t]
 ~~~
 
-生产非视觉上下文为 750 units（60 秒），视觉上下文为 100 units（8 秒）。两类 token
-独立淘汰，保留后的 token 仍按原始时间顺序参与 causal attention。
+生产上下文为 750 units（60 秒），每个 unit 固定 16 个 slots。KV 按完整 unit 淘汰，
+保留后的 token 仍按原始时间顺序参与 causal attention。
 
 ### 12.2 Latent memory 读取
 
@@ -513,7 +543,7 @@ checkpoint 保存 Z、H、KV、audio cache、speech local、action local 和 uni
 ~~~
 Audio Capture       音频环形缓冲
 Screen Capture      每 unit 完整屏幕帧
-InputEncoder        音频/视觉/时间编码
+Perceiver           音频/视觉/时间 stem 与 16-slot 感知编码
 Backbone Worker     WorldStateUpdate、Backbone、KV/Z 状态
 Speech Worker       codec frame 和播放块
 Action Worker       Harness grammar/safety/execution
@@ -608,7 +638,8 @@ Speech 和 Action 共享 Backbone 梯度，但使用独立 loss 和独立输出 
 
 ### 15.4 长期记忆监督
 
-没有独立 memory loss、future embedding loss、probe loss、write-budget 或 diversity loss。未来 Speech/Action loss 通过：
+Z 没有独立 memory loss、probe loss、write-budget 或 diversity loss。Predictor 使用独立
+JEPA 表示目标，但它不是 Z 的 memory target。未来 Speech/Action loss 仍通过：
 
 ~~~
 future loss -> future H -> future Z -> earlier WorldStateUpdate
@@ -616,20 +647,44 @@ future loss -> future H -> future Z -> earlier WorldStateUpdate
 
 监督 Z_t 的长期信息选择。
 
-### 15.5 总损失
+### 15.5 JEPA 表示预测损失
+
+同一个参数版本同时计算 source 和 target，target 侧停止梯度：
 
 $$
-L_{total}=w_{speech}L_{speech}+w_{action}L_{action}
+L_{pred}=E_{t,s}\left[
+\left\|N(\widehat P_{t+1|t,s})-stop\_grad(N(P_{t+1,s}))\right\|_2^2
+\right]
 $$
 
-这是当前最终目标架构的唯一训练目标。各模块影响关系为：
+其中 N(X)=X/max(||X||_2,10^-4)。为防止单参数 Perceiver 表示坍塌，在有效 source
+表示上按 slot、channel 跨 batch-time 计算：
+
+$$
+\sigma_{s,d}=\sqrt{Var_{b,t}(P_{t,s,d})+10^{-4}},\qquad
+L_{var}=E_{s,d}[max(0,1-\sigma_{s,d})]
+$$
+
+$$
+L_{JEPA}=L_{pred}+L_{var}
+$$
+
+有效 source 少于两个时跳过 L_var；不得跨 episode、session 或不连续 observation 配对。
+
+### 15.6 总损失
+
+Pretrain、SFT 和 Online RL 分别使用 1.0、0.5 和两路 0.1 的 JEPA 系数，完整公式由
+[统一三阶段训练架构](three-stage-training.md) 约束。各模块影响关系为：
 
 | 模块 | 直接梯度 | 主要行为影响 |
 |---|---|---|
 | Speech Head | Speech mode/codec loss | 语音 mode、codec 准确率和局部连续性 |
 | Action Head | Action token loss | grammar、参数 token 和跨 unit continuation |
-| Backbone | 两个输出 loss | 共享多模态理解和输出条件表示 |
-| WorldStateUpdate/Z | 未来两个输出 loss | 长期目标、约束、计划和抽象任务状态保持 |
+| Perceiver | Speech、Action/RL、JEPA source loss | 当前多模态观察表示 |
+| Predictor | JEPA loss | 单步未来表示预测 |
+| PredictionAdapter/Future Gate | Speech、Action/RL loss | 受控注入未来先验 |
+| Backbone | Speech、Action/RL loss | 共享多模态理解和输出条件表示 |
+| WorldStateUpdate/Z | 未来输出 loss 与 JEPA source loss | 长期目标、约束、计划和抽象任务状态保持 |
 | KV state | 无参数 loss | 近期精确上下文 |
 | local states | 对应 head loss | 语音跨帧和 action 跨 unit 连续性 |
 
@@ -645,7 +700,9 @@ $$
 
 ### 16.3 梯度路径
 
-单个 unit 的输出 loss 通过当前 Backbone 反向传播；跨 unit 的未来 loss 通过 Z 和 H 反向传播。TBPTT 只在配置边界 detach，不能在每个 unit 重置状态。
+单个 unit 的输出 loss 通过当前 Backbone 和 Perceiver 反向传播；跨 unit 的未来行为 loss
+通过 Z 和 H 反向传播。JEPA target 侧 detach，source 侧可通过 Predictor、Z 和 TBPTT 内
+历史状态传播。TBPTT 只在配置边界 detach，不能在每个 unit 重置状态。
 
 ### 16.4 外部执行边界
 
@@ -666,10 +723,12 @@ $$
 ~~~
 state = initial_state()
 
-for each 80 ms unit U_t:
-    E_t = InputEncoder(U_t)
+for each 80 ms observation O_t:
+    P_t = Perceiver(O_t)
     Z_t = WorldStateUpdate(state.Z, state.H)
-    H_t, KV_t = Backbone(E_t, state.KV, Z_t)
+    P_hat = Predictor(P_t, Z_t)
+    F_t = PredictionAdapter(stop_grad(P_hat)) + E_future
+    H_t, KV_t = Backbone(P_t, Z_t, F_t, state.KV)
     speech_t = SpeechHead(H_t, state.speech_local)
     action_t = ActionHead(H_t, state.action_local)
 
@@ -689,7 +748,8 @@ for each 80 ms unit U_t:
 
 ## 19. MiniCPM 系基础实现
 
-MiniCPM 或同类多模态主干可以提供视觉编码、音频编码、多模态 projector、因果 Backbone 和增量 KV。项目必须在此基础上保持：
+MiniCPM 或同类多模态主干可以提供视觉编码、音频编码、Perceiver stems、因果 Backbone
+和增量 KV。项目必须在此基础上保持：
 
 1. 固定 80 ms unit；
 2. 完整 H_t 暂存；
@@ -822,9 +882,11 @@ UI-TARS/Harness 必须提供：
 
 ~~~
 mixed microphone + screen + time
-    -> InputEncoder(U_t) = E_t
+    -> Perceiver(O_t) = P_t
     -> Z_t = WorldStateUpdate(Z_(t-1), H_(t-1))
-    -> H_t, KV_t = Backbone(E_t, KV_(t-1), Z_t)
+    -> Predictor(P_t, Z_t) = P_hat_(t+1|t)
+    -> PredictionAdapter(stop_grad(P_hat)) = F_t
+    -> H_t, KV_t = Backbone(P_t, Z_t, F_t, KV_(t-1))
     -> SpeechHead(H_t) + UnifiedActionHead(H_t)
     -> frozen Mimi decode / Harness execution
     -> real acoustic and visual feedback

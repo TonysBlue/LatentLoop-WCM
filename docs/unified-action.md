@@ -1,7 +1,7 @@
 # 统一电脑动作输出协议
 
 > 状态：最终目标 Structured ActionFrame 协议
-> 日期：2026-08-11
+> 日期：2026-08-20
 > 关联顶层架构：[实时流多模态 LatentLoop 完整方案](realtime-multimodal-latent-loop.md)
 > 对称语音协议：[直接流式语音实施说明](direct-speech.md)
 
@@ -13,11 +13,13 @@ Unified Action Head 是模型唯一的电脑操控输出头。统一的是 Actio
 零个或多个有序 `ControlSignal`，Harness 校验后立即执行。
 
 ```text
-E_t       = InputEncoder(U_t)
-Z_t       = WorldStateUpdate(Z_(t-1), H_(t-1))
-H_t, KV_t = Backbone(E_t, KV_(t-1), Z_t)
-frame_t   = ActionHead(H_t, action_local_(t-1))
-controls  = decode(frame_t)
+P_t                 = Perceiver(O_t)
+Z_t                 = WorldStateUpdate(Z_(t-1), H_(t-1))
+P_hat_(t+1|t)       = Predictor(P_t, Z_t)
+F_t                 = PredictionAdapter(stop_grad(P_hat_(t+1|t))) + E_future
+H_t, KV_t           = Backbone(P_t, Z_t, F_t, KV_(t-1))
+frame_t             = ActionHead(H_t, action_local_(t-1))
+controls            = decode(frame_t)
 ```
 
 Action Head 不调用操作系统。Model Service 和 Harness 之间只传递物理
@@ -136,12 +138,12 @@ HOTKEY 使用版本化 32-key table，每 frame 最多 8 keys 且至少一个。
 Action Head 读取当前 `H_t` 和 action-local state，先预测 kind，再只激活对应参数分支：
 
 ```text
-action_query_t = f(H_t[STATE_QUERY], previous_frame_embedding)
-visual_context_t = Attention(action_query_t, H_t[VISION_0:VISION_15])
-context_t = action_query_t + visual_context_t
+state_context_t = Attention(learned_state_query, H_t)
+spatial_context_t[0:16] = Attention(learned_spatial_queries[0:16], H_t)
+context_t = f(state_context_t, previous_frame_embedding)
 kind_t    ~ Categorical(kind_logits(context_t))
 
-POINTER_MOVE   -> joint cell categorical + bounded residual distribution
+POINTER_MOVE   -> spatial_context + joint cell categorical + bounded residual distribution
 POINTER_BUTTON -> button categorical + phase categorical
 SCROLL         -> bounded continuous distribution
 TYPE           -> length categorical + autoregressive byte decoder
@@ -149,8 +151,10 @@ HOTKEY         -> length categorical + autoregressive key decoder
 ```
 
 这仍然是一个 Unified Action Head：参数分支由同一个 kind 决策条件化，共享 context、
-状态、概率对象和训练/rollout 接口，不是多个可独立调用的动作 head。视觉编码器不直接
-连接 Action Head；动作头只读取已经融合音频、时间、视觉和历史状态的 Backbone hidden。
+状态、概率对象和训练/rollout 接口，不是多个可独立调用的动作 head。16 个 learned spatial
+queries 为 32x32 coarse cell 分布提供空间读取能力，但不假定 H_t 的 16 个 Perceiver slots
+与 4x4 屏幕位置一一对应。视觉编码器不直接连接 Action Head；动作头只读取已经融合音频、
+时间、视觉和历史状态的 Backbone hidden。
 
 ## 5. Action local state
 
@@ -239,10 +243,13 @@ frame 为动作概率单位，而不是把 kind、每个 byte 和坐标重复当
 ```text
 L_total = speech_loss_weight * L_speech
         + action_loss_weight * L_action
+        + stage_jepa_weight * L_JEPA
 ```
 
-Action loss 通过 Action Head、Backbone、InputEncoder 和 WorldStateUpdate 训练全模型；没有
-额外 action-control、confidence、success、memory 或 rollback loss。
+Action loss 通过 Action Head、Backbone、Perceiver、Future Adapter/Gate 和
+WorldStateUpdate 训练行为路径；它在 predicted slots 处 stop-gradient，不训练 Predictor。
+Predictor 由 JEPA loss 训练。没有额外 action-control、confidence、success、memory 或
+rollback loss。
 
 ## 9. 推理与 Harness 安全边界
 
@@ -277,7 +284,10 @@ identity。恢复后下一 frame 的 logits、采样和 UTF-8 assembler 状态�
 - action frame joint log-prob 与监督 NLL 使用相同分解；
 - action 监督全 false 时 loss 有限且无虚假梯度；
 - checkpoint 中断恢复、TBPTT detach 和 session reset；
-- Action loss 到达 Action Head、Backbone 和 WorldStateUpdate。
+- Action loss 到达 Action Head、Backbone、Perceiver、Future Adapter/Gate 和
+  WorldStateUpdate，但不到达 Predictor；
+- learned state/spatial queries 对任意 slot 排列都保持 shape 和概率接口，不依赖旧
+  `STATE_QUERY`/`VISION_*` 位置。
 
 ### 11.3 边界与回归
 

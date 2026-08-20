@@ -1,7 +1,7 @@
 # 统一三阶段训练架构
 
 > 状态：最终目标训练契约
-> 日期：2026-08-19
+> 日期：2026-08-20
 > 关联文档：[实时流多模态 LatentLoop](realtime-multimodal-latent-loop.md) · [Online RL：Online Recurrent PPO 与隔离环境](online-recurrent-ppo-training.md)
 
 ## 1. 总体定义
@@ -21,6 +21,8 @@ Online Recurrent PPO。规模之间只改变数据数量、更新数、PPO 窗�
 模型运行时始终只有两个输出头：Speech Head 直接输出 speech mode 与 Mimi codec token；
 Unified Action Head 通过一个结构化 ActionFrame schema 输出全部电脑操作。RL 的 Value Head
 是训练专用估值组件，不跨 Model Service 边界，也不承担独立 memory loss。
+三个阶段共享同一个 Perceiver、Predictor、WorldStateUpdate、Backbone、PredictionAdapter
+和 Future Gate；没有 EMA target encoder 或独立 Reasoner。
 
 ## 2. 三类独立数据
 
@@ -44,15 +46,18 @@ Pretrain 使用 teacher forcing 的结构化 frame negative log-likelihood：
 ```text
 L_pretrain = speech_weight * (L_speech_mode + L_speech_codec)
            + action_weight * L_action_frame
+           + 1.0 * L_JEPA
 ```
 
-各项只在自己的有效 mask 上归一化。Speech Head、Unified Action Head、
-InputEncoder、Backbone 和 WorldStateUpdate 全部更新。WorldStateUpdate 没有独立 target；
-未来 speech/action loss 通过 `Z_t -> Backbone -> H_t -> heads` 反向监督记忆更新。
+各项只在自己的有效 mask 上归一化。Speech Head、Unified Action Head、Perceiver、
+Predictor、PredictionAdapter/Future Gate、Backbone 和 WorldStateUpdate 全部按各自梯度路径
+更新。WorldStateUpdate 没有独立 memory target；未来 speech/action loss 通过
+`Z_t -> Backbone -> H_t -> heads` 反向监督记忆更新，JEPA source loss 另外通过 Predictor
+监督 Perceiver 和 WorldStateUpdate。
 
 ## 4. SFT
 
-SFT 与 Pretrain 使用相同的模型 forward 和损失形式，但输入是独立、审核过的专家
+SFT 与 Pretrain 使用相同的模型 forward，但 JEPA 系数为 0.5；输入是独立、审核过的专家
 交互轨迹。SFT 不是“只训练 head”的适配阶段，全模型继续更新。SFT 最终 checkpoint
 同时成为 Online RL 的初始 policy 与冻结 reference policy。
 
@@ -67,6 +72,28 @@ Judge 只读取 canonical observation bytes，推断单 active goal 的 Reward E
 finalization watermark 后，后台候选策略用时间折扣 GAE、Value Head 和 clipped policy
 ratio 更新。旧策略继续服务，候选通过验证后在 unit 边界原子切换。详细数学定义见
 `online-recurrent-ppo-training.md`。
+
+每个 PPO epoch 同时计算当前 sealed on-policy window 与 SFT replay episode 的连续观测
+JEPA loss，两路系数分别为 0.1。SFT replay 的行为监督系数仍为 0.1；独立 preservation
+数据只执行行为 loss ratio 门禁，不参与任何 optimizer 梯度。
+
+### 5.1 单参数 JEPA 时序
+
+在一个 optimizer 参数版本 theta_k 内：
+
+```text
+P_t       = Perceiver(O_t; theta_k)
+P_(t+1)   = Perceiver(O_(t+1); theta_k)
+P_hat     = Predictor(P_t, Z_t)
+L_JEPA    = distance(P_hat, stop_grad(P_(t+1))) + variance_floor(P_t)
+```
+
+完整梯度累积周期结束后才执行 `optimizer.step()`。模型时间步不等于 optimizer step；
+同一 JEPA pair 的 source 和 target 始终使用同一参数版本。P_(t+1) 在下一正常时刻仍作为
+可微 source 接受行为和 JEPA 梯度。
+
+监督 chunk 最后一项使用 Perceiver-only lookahead 编码下一 observation 和 audio cache 副本，
+不更新 Z/H/KV，丢弃返回 cache。episode 最后一项没有 successor 时不形成 pair。
 
 配置不使用重复的 `training.objective`。`training.stage` 唯一决定三阶段分派；
 仅当 `stage=rl` 时，`training.rl.algorithm=online_recurrent_ppo` 决定具体 RL 更新规则。
@@ -87,6 +114,7 @@ environment_id
 environment_version
 protocol_version
 action_schema_id = structured-action-v1
+architecture_id = latentloop-perceiver-jepa-v1
 runtime_identity
 decoded_controls
 receipts
@@ -96,6 +124,8 @@ receipts
 采样 frame、speech/action joint old/reference log-prob、value、Reward Event identity、环境 receipt、
 observation/policy-sample hash chain、seed 和 window disposition。旧 flat-action 数据不属于当前
 输入；历史资产已清理，后续只从源轨迹生成当前数据。
+每个 trainable sealed window 还记录 `lookahead_unit_index=end_unit+1` 与对应 observation
+payload SHA-256；该 observation 只用于最后一个 source 的 JEPA target。
 
 ## 7. 当前 checkpoint 与阶段谱系
 
@@ -107,6 +137,7 @@ algorithm
 data_identity
 codec identity
 action_schema_id
+architecture_id
 parent_sha256
 reference_checkpoint_sha256
 environment_id
@@ -122,7 +153,8 @@ policy_sample_chain_sha256
 
 Pretrain checkpoint 的 parent 可以为空；SFT 的 parent 必须是 Pretrain；Online RL 的 parent
 必须沿训练更新链前进，同时 reference hash 始终指向冻结的 SFT checkpoint。旧 flat-action
-checkpoint 直接拒绝，不能 resume 或 warm-start Action Head 权重。
+checkpoint 以及旧 InputEncoder/KV/head 布局 checkpoint 直接拒绝，不能 resume 或
+warm-start 任意权重。
 Pretrain/SFT checkpoint 的 `algorithm=null`；Online RL checkpoint 的
 `algorithm=online_recurrent_ppo`。checkpoint 不保存 `objective` 字段。
 
@@ -151,6 +183,10 @@ Canary 是完整训练链的小规模证明，不是删减版算法。它同样�
 - 环境客户端校验 identity，并保证 observation 不携带 reward/隐藏状态；
 - 单一 lifetime 时间线不分叉、不从同一初始状态生成 group，并记录 old/reference log-prob；
 - time-discount GAE、PPO clipping、Value、KL、窗口封存和全模型梯度可验证；
+- JEPA target detach、同参数版本、方差下界、chunk lookahead 不改变 recurrent state 可验证；
+- PPO on-policy/replay JEPA 分别加权记录，lookahead 不进入 reward、ratio 或 PPO unit count；
+- 行为 loss 在 Predictor 前 stop-gradient，但能训练 Adapter/Gate；JEPA loss 能训练 Predictor、
+  source Perceiver 和 WorldStateUpdate；
 - 后台 candidate 期间旧 policy 持续服务，stale 窗口隔离，有限性/KL/SFT 保真门禁拒绝时
   serving policy 不变；
 - resume 校验完整谱系和当前模型状态，并拒绝不完整 checkpoint；

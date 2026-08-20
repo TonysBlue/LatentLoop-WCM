@@ -10,6 +10,7 @@ from omegaconf import OmegaConf
 
 @dataclass(slots=True)
 class ModelConfig:
+    architecture_id: str = "latentloop-perceiver-jepa-v1"
     model_dim: int = 256
     latent_dim: int = 256
     num_layers: int = 4
@@ -20,8 +21,9 @@ class ModelConfig:
     audio_kernel: int = 400
     audio_stride: int = 160
     vision_tokens: int = 16
-    temporal_kv_units: int = 750
-    vision_kv_units: int = 100
+    perceiver_slots: int = 16
+    perceiver_layers: int = 2
+    predictor_layers: int = 2
     latent_slots: int = 8
     world_state_update_type: str = "gated_residual"
     delta_time_fourier_bands: int = 8
@@ -44,7 +46,7 @@ class ModelConfig:
 
     @property
     def tokens_per_unit(self) -> int:
-        return self.audio_tokens + self.vision_tokens + 2  # time, vision, and state-query
+        return self.perceiver_slots
 
 
 @dataclass(slots=True)
@@ -90,6 +92,7 @@ class TrainingConfig:
     backbone_train_mode: str = "all"
     speech_loss_weight: float = 1.0
     action_loss_weight: float = 1.0
+    jepa_loss_weight: float = 1.0
     memory_horizon_units: int = 750
     min_learning_rate_ratio: float = 0.1
     rl: RLConfig = field(default_factory=lambda: RLConfig())
@@ -105,6 +108,8 @@ class RLConfig:
     value_coef: float = 0.5
     entropy_coef: float = 0.01
     sft_replay_coef: float = 0.1
+    on_policy_jepa_coef: float = 0.1
+    replay_jepa_coef: float = 0.1
     max_pending_reward_units: int = 750
     candidate_max_reference_kl: float = 1.0
     candidate_max_eval_loss_ratio: float = 1.25
@@ -184,15 +189,18 @@ class ProjectConfig:
         if self.model.kv_units < 1 or self.model.latent_slots < 1:
             raise ValueError("kv_units and latent_slots must be positive")
         expected_kv_units = -(-self.model.kv_window_ms // self.data.unit_ms)
+        if self.model.kv_units != expected_kv_units:
+            raise ValueError("KV must exactly cover kv_window_ms at the configured unit_ms")
+        if self.model.architecture_id != "latentloop-perceiver-jepa-v1":
+            raise ValueError("model.architecture_id must be latentloop-perceiver-jepa-v1")
+        if self.model.vision_tokens != 16:
+            raise ValueError("vision_tokens must be 16")
         if (
-            self.model.kv_units != expected_kv_units
-            or self.model.temporal_kv_units != expected_kv_units
+            self.model.perceiver_slots != 16
+            or self.model.perceiver_layers != 2
+            or self.model.predictor_layers != 2
         ):
-            raise ValueError(
-                "temporal KV must exactly cover kv_window_ms at the configured unit_ms"
-            )
-        if self.model.vision_tokens != 16 or self.model.vision_kv_units < 1:
-            raise ValueError("vision_tokens must be 16 and vision_kv_units must be positive")
+            raise ValueError("Perceiver/Predictor topology must be 16 slots and 2/2 layers")
         if self.model.world_state_update_type != "gated_residual":
             raise ValueError("world_state_update_type must be gated_residual")
         if self.model.delta_time_fourier_bands < 1:
@@ -322,6 +330,17 @@ class ProjectConfig:
                 raise ValueError("PPO replay and preservation datasets must be independent")
         if self.training.speech_loss_weight <= 0 or self.training.action_loss_weight <= 0:
             raise ValueError("speech_loss_weight and action_loss_weight must be positive")
+        expected_jepa_weight = 0.5 if self.training.stage == "sft" else 1.0
+        if self.training.stage != "rl" and self.training.jepa_loss_weight != expected_jepa_weight:
+            raise ValueError(
+                f"{self.training.stage} requires jepa_loss_weight={expected_jepa_weight}"
+            )
+        if (
+            rl.sft_replay_coef != 0.1
+            or rl.on_policy_jepa_coef != 0.1
+            or rl.replay_jepa_coef != 0.1
+        ):
+            raise ValueError("Online RL SFT replay and both JEPA coefficients must be 0.1")
         if self.training.memory_horizon_units < 1:
             raise ValueError("memory_horizon_units must be positive")
         if self.training.tbptt_units != self.training.memory_horizon_units:
