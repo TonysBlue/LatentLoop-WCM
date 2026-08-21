@@ -14,18 +14,31 @@ SILENCE 由 Model Service 输出全零 80 ms PCM，Harness 不理解 Mimi。
 直接语音路径将模型时钟固定为 80 ms。每个 unit 接收一路 24 kHz、1920 样本的混合麦克风输入。完整状态顺序为：
 
 $$
-\begin{aligned}
-P_t &= \mathrm{Perceiver}(O_t), \\
-Z_t &= \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1}), \\
-\widehat{P}_{t+1\mid t} &= \mathrm{Predictor}(P_t, Z_t), \\
-F_t &= \mathrm{PredictionAdapter}\!\left(
+P_t = \mathrm{Perceiver}(O_t)
+$$
+
+$$
+Z_t = \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1})
+$$
+
+$$
+\widehat{P}_{t+1\mid t} = \mathrm{Predictor}(P_t, Z_t)
+$$
+
+$$
+F_t = \mathrm{PredictionAdapter}\!\left(
 \mathrm{stopgrad}(\widehat{P}_{t+1\mid t})
-\right) + E_{\mathrm{future}}, \\
-(H_t, \mathrm{KV}_t) &= \mathrm{Backbone}
-\left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right), \\
+\right) + E_{\mathrm{future}}
+$$
+
+$$
+(H_t, \mathrm{KV}_t) = \mathrm{Backbone}
+\left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right)
+$$
+
+$$
 \mathrm{speech}_t
-&= \mathrm{SpeechHead}(H_t, \mathrm{speech\_local}_{t-1}).
-\end{aligned}
+= \mathrm{SpeechHead}(H_t, \mathrm{speech\_local}_{t-1})
 $$
 
 Speech Head 每个 unit 预测 SILENCE 或 SPEECH。只有 SPEECH unit 输出一个 Mimi 帧，冻结的因果 decoder 将其转换为 1920 个波形采样。运行路径不经过文本或 TTS；播放回流在下一 unit 作为混合麦克风输入重新进入模型。

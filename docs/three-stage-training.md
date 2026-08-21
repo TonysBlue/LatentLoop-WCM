@@ -85,16 +85,23 @@ JEPA loss，两路系数分别为 0.1。SFT replay 的行为监督系数仍为 0
 在一个 optimizer 参数版本 $\theta_k$ 内：
 
 $$
-\begin{aligned}
-P_t &= \mathrm{Perceiver}(O_t; \theta_k), \\
-P_{t+1} &= \mathrm{Perceiver}(O_{t+1}; \theta_k), \\
-\widehat{P}_{t+1\mid t} &= \mathrm{Predictor}(P_t, Z_t), \\
+P_t = \mathrm{Perceiver}(O_t; \theta_k)
+$$
+
+$$
+P_{t+1} = \mathrm{Perceiver}(O_{t+1}; \theta_k)
+$$
+
+$$
+\widehat{P}_{t+1\mid t} = \mathrm{Predictor}(P_t, Z_t)
+$$
+
+$$
 \mathcal{L}_{\mathrm{JEPA}}
-&= \mathrm{distance}\!\left(
+= \mathrm{distance}\!\left(
 \widehat{P}_{t+1\mid t}, \mathrm{stopgrad}(P_{t+1})
 \right)
-+ \mathrm{variance\_floor}(P_t).
-\end{aligned}
++ \mathrm{variance\_floor}(P_t)
 $$
 
 完整梯度累积周期结束后才执行 `optimizer.step()`。模型时间步不等于 optimizer step；

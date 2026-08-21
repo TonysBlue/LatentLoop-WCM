@@ -12,16 +12,26 @@
 本地平台直接实现顶层架构，不维护语义不同的过渡 head 或阶段专用训练循环：
 
 $$
-\begin{aligned}
-P_t &= \mathrm{Perceiver}(O_t), \\
-Z_t &= \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1}), \\
-\widehat{P}_{t+1\mid t} &= \mathrm{Predictor}(P_t, Z_t), \\
-F_t &= \mathrm{PredictionAdapter}\!\left(
+P_t = \mathrm{Perceiver}(O_t)
+$$
+
+$$
+Z_t = \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1})
+$$
+
+$$
+\widehat{P}_{t+1\mid t} = \mathrm{Predictor}(P_t, Z_t)
+$$
+
+$$
+F_t = \mathrm{PredictionAdapter}\!\left(
 \mathrm{stopgrad}(\widehat{P}_{t+1\mid t})
-\right) + E_{\mathrm{future}}, \\
-(H_t, \mathrm{KV}_t) &= \mathrm{Backbone}
-\left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right).
-\end{aligned}
+\right) + E_{\mathrm{future}}
+$$
+
+$$
+(H_t, \mathrm{KV}_t) = \mathrm{Backbone}
+\left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right)
 $$
 
 $H_t$ 随后同时进入 Speech Head 和 Unified Action Head；训练使用 masked loss 与
@@ -155,20 +165,33 @@ class StreamUnit:
 ### 5.3 编码和状态顺序
 
 $$
-\begin{aligned}
-P_t &= \mathrm{Perceiver}(O_t), \\
-Z_t &= \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1}), \\
-\widehat{P}_{t+1\mid t} &= \mathrm{Predictor}(P_t, Z_t), \\
-F_t &= \mathrm{PredictionAdapter}\!\left(
+P_t = \mathrm{Perceiver}(O_t)
+$$
+
+$$
+Z_t = \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1})
+$$
+
+$$
+\widehat{P}_{t+1\mid t} = \mathrm{Predictor}(P_t, Z_t)
+$$
+
+$$
+F_t = \mathrm{PredictionAdapter}\!\left(
 \mathrm{stopgrad}(\widehat{P}_{t+1\mid t})
-\right) + E_{\mathrm{future}}, \\
-(H_t, \mathrm{KV}_t) &= \mathrm{Backbone}
-\left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right), \\
-U_t &= \left(
+\right) + E_{\mathrm{future}}
+$$
+
+$$
+(H_t, \mathrm{KV}_t) = \mathrm{Backbone}
+\left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right)
+$$
+
+$$
+U_t = \left(
 \mathrm{SpeechHead}(H_t, \mathrm{speech\_local}_{t-1}),
 \mathrm{ActionHead}(H_t, \mathrm{action\_local}_{t-1})
-\right).
-\end{aligned}
+\right)
 $$
 
 `P_t` 和 `H_t` 都保存16个 slots，H_t 不能被 pooled summary 替代。audio cache 是
@@ -377,21 +400,28 @@ optimizer、学习率、梯度累积、FP16、梯度裁剪和 checkpoint cadence
 ### 10.3 Loss 契约
 
 $$
-\begin{aligned}
 \mathcal{L}_{\mathrm{speech}}
-&= \mathcal{L}_{\mathrm{speech\_mode}}
-+ \mathcal{L}_{\mathrm{speech\_codec}}, \\
+= \mathcal{L}_{\mathrm{speech\_mode}}
++ \mathcal{L}_{\mathrm{speech\_codec}}
+$$
+
+$$
 \mathcal{L}_{\mathrm{action}}
-&= \mathrm{MaskedStructuredActionNLL}
-\left(\mathrm{action\_output}, \mathrm{action\_frame}\right), \\
+= \mathrm{MaskedStructuredActionNLL}
+\left(\mathrm{action\_output}, \mathrm{action\_frame}\right)
+$$
+
+$$
 \mathcal{L}_{\mathrm{JEPA}}
-&= \mathcal{L}_{\mathrm{normalized\_slot\_prediction}}
-+ \mathcal{L}_{\mathrm{latent\_variance\_floor}}, \\
+= \mathcal{L}_{\mathrm{normalized\_slot\_prediction}}
++ \mathcal{L}_{\mathrm{latent\_variance\_floor}}
+$$
+
+$$
 \mathcal{L}_{\mathrm{total}}
-&= w_{\mathrm{speech}}\mathcal{L}_{\mathrm{speech}}
+= w_{\mathrm{speech}}\mathcal{L}_{\mathrm{speech}}
 + w_{\mathrm{action}}\mathcal{L}_{\mathrm{action}}
-+ w_{\mathrm{JEPA}}^{(\mathrm{stage})}\mathcal{L}_{\mathrm{JEPA}}.
-\end{aligned}
++ w_{\mathrm{JEPA}}^{(\mathrm{stage})}\mathcal{L}_{\mathrm{JEPA}}
 $$
 
 SILENCE unit 的 codec loss 被 mask。Action 参数按 kind 激活，连续参数 NLL 与 rollout

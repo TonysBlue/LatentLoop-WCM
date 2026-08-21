@@ -33,21 +33,37 @@ readiness，不隶属于 Training System。
 每个时间单元严格执行：
 
 $$
-\begin{aligned}
-P_t &= \mathrm{Perceiver}(O_t), \\
-Z_t &= \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1}), \\
-\widehat{P}_{t+1\mid t} &= \mathrm{Predictor}(P_t, Z_t), \\
-F_t &= \mathrm{PredictionAdapter}
+P_t = \mathrm{Perceiver}(O_t)
+$$
+
+$$
+Z_t = \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1})
+$$
+
+$$
+\widehat{P}_{t+1\mid t} = \mathrm{Predictor}(P_t, Z_t)
+$$
+
+$$
+F_t = \mathrm{PredictionAdapter}
 \left(\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})\right)
-+ E_{\mathrm{future}}, \\
-(H_t, \mathrm{KV}_t) &= \mathrm{Backbone}
-\left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right), \\
-U_t &= \left(
++ E_{\mathrm{future}}
+$$
+
+$$
+(H_t, \mathrm{KV}_t) = \mathrm{Backbone}
+\left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right)
+$$
+
+$$
+U_t = \left(
 \mathrm{SpeechHead}(H_t, \mathrm{speech\_local}_{t-1}),
 \mathrm{ActionHead}(H_t, \mathrm{action\_local}_{t-1})
-\right), \\
-O_{t+1} &= \mathrm{Environment}(O_t, U_t).
-\end{aligned}
+\right)
+$$
+
+$$
+O_{t+1} = \mathrm{Environment}(O_t, U_t)
 $$
 
 H_t 是主干经过 final normalization 后的完整 16-slot hidden 序列，必须暂存到下一单元；
@@ -311,10 +327,11 @@ self-attention、可选 World cross-attention、可选 gated Future cross-attent
 Future 分支定义为：
 
 $$
-\begin{aligned}
-Q_t^{(l)} &= \mathrm{LayerNorm}(H_t^{(l)}), \\
-C_t^{(l)} &= \mathrm{FutureCrossAttention}(Q_t^{(l)}, F_t, F_t).
-\end{aligned}
+Q_t^{(l)} = \mathrm{LayerNorm}(H_t^{(l)})
+$$
+
+$$
+C_t^{(l)} = \mathrm{FutureCrossAttention}(Q_t^{(l)}, F_t, F_t)
 $$
 
 $$
@@ -363,13 +380,25 @@ Backbone，形成的 $H_t$ 在下一轮影响 $Z_{t+1}$。
 一种等价内部参数化为：
 
 $$
-\begin{aligned}
-Q_{t-1} &= W_q(Z_{t-1}) + I_{slot},\\
-C_{t-1} &= \mathrm{Attention}(Q_{t-1}, H_{t-1}, H_{t-1}),\\
-\Delta Z_{t-1} &= \mathrm{Candidate}(Z_{t-1}, C_{t-1}),\\
-G_{t-1} &= \sigma\left(\mathrm{Gate}(Z_{t-1}, C_{t-1}) - 2\right),\\
-Z_t &= \mathrm{LayerNorm}\left(Z_{t-1} + 0.1 G_{t-1}\odot\Delta Z_{t-1}\right).
-\end{aligned}
+Q_{t-1} = W_q(Z_{t-1}) + I_{slot}
+$$
+
+$$
+C_{t-1} = \mathrm{Attention}(Q_{t-1}, H_{t-1}, H_{t-1})
+$$
+
+$$
+\Delta Z_{t-1} = \mathrm{Candidate}(Z_{t-1}, C_{t-1})
+$$
+
+$$
+G_{t-1} = \sigma\left(\mathrm{Gate}(Z_{t-1}, C_{t-1}) - 2\right)
+$$
+
+$$
+Z_t = \mathrm{LayerNorm}\left(
+Z_{t-1} + 0.1 G_{t-1}\odot\Delta Z_{t-1}
+\right)
 $$
 
 `G_(t-1)` 按 slot 和 latent dimension 生成，而不是单个全局标量。门控残差只是状态更新的
@@ -486,10 +515,11 @@ Harness control-plane 操作，不是模型 action kind。
 ### 11.1 感知与预测
 
 $$
-\begin{aligned}
-P_t &= \mathrm{Perceiver}(O_t), \\
-\widehat{P}_{t+1\mid t} &= \mathrm{Predictor}(P_t, Z_t).
-\end{aligned}
+P_t = \mathrm{Perceiver}(O_t)
+$$
+
+$$
+\widehat{P}_{t+1\mid t} = \mathrm{Predictor}(P_t, Z_t)
 $$
 
 ### 11.2 记忆
@@ -692,12 +722,13 @@ $\mathcal{N}(X)=X/\max(\lVert X\rVert_2,10^{-4})$。为防止单参数 Perceiver
 表示上按 slot、channel 跨 batch-time 计算：
 
 $$
-\begin{aligned}
 \sigma_{s,d}
-&= \sqrt{\mathrm{Var}_{b,t}(P_{t,s,d}) + 10^{-4}}, \\
+= \sqrt{\mathrm{Var}_{b,t}(P_{t,s,d}) + 10^{-4}}
+$$
+
+$$
 \mathcal{L}_{\mathrm{var}}
-&= \mathbb{E}_{s,d}\!\left[\max(0, 1-\sigma_{s,d})\right].
-\end{aligned}
+= \mathbb{E}_{s,d}\!\left[\max(0, 1-\sigma_{s,d})\right]
 $$
 
 $$

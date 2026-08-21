@@ -13,19 +13,35 @@ Unified Action Head 是模型唯一的电脑操控输出头。统一的是 Actio
 零个或多个有序 `ControlSignal`，Harness 校验后立即执行。
 
 $$
-\begin{aligned}
-P_t &= \mathrm{Perceiver}(O_t), \\
-Z_t &= \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1}), \\
-\widehat{P}_{t+1\mid t} &= \mathrm{Predictor}(P_t, Z_t), \\
-F_t &= \mathrm{PredictionAdapter}\!\left(
+P_t = \mathrm{Perceiver}(O_t)
+$$
+
+$$
+Z_t = \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1})
+$$
+
+$$
+\widehat{P}_{t+1\mid t} = \mathrm{Predictor}(P_t, Z_t)
+$$
+
+$$
+F_t = \mathrm{PredictionAdapter}\!\left(
 \mathrm{stopgrad}(\widehat{P}_{t+1\mid t})
-\right) + E_{\mathrm{future}}, \\
-(H_t, \mathrm{KV}_t) &= \mathrm{Backbone}
-\left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right), \\
+\right) + E_{\mathrm{future}}
+$$
+
+$$
+(H_t, \mathrm{KV}_t) = \mathrm{Backbone}
+\left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right)
+$$
+
+$$
 \mathrm{frame}_t
-&= \mathrm{ActionHead}(H_t, \mathrm{action\_local}_{t-1}), \\
-\mathrm{controls}_t &= \mathrm{decode}(\mathrm{frame}_t).
-\end{aligned}
+= \mathrm{ActionHead}(H_t, \mathrm{action\_local}_{t-1})
+$$
+
+$$
+\mathrm{controls}_t = \mathrm{decode}(\mathrm{frame}_t)
 $$
 
 Action Head 不调用操作系统。Model Service 和 Harness 之间只传递物理
@@ -96,17 +112,30 @@ ActionFrame {
 绝对坐标使用 32x32 joint coarse grid categorical 和 cell 内 bounded residual：
 
 $$
-\begin{aligned}
-c_x &= \min\!\left(31,
-\left\lfloor 32\,\mathrm{clamp}(x,0,1)\right\rfloor\right), \\
-c_y &= \min\!\left(31,
-\left\lfloor 32\,\mathrm{clamp}(y,0,1)\right\rfloor\right), \\
-c &= 32c_y + c_x, \\
-(r_x,r_y) &= (32x-c_x,\ 32y-c_y),
-\qquad (r_x,r_y)\in[0,1]^2, \\
-\widehat{x} &= \frac{c_x+r_x}{32}, \\
-\widehat{y} &= \frac{c_y+r_y}{32}.
-\end{aligned}
+c_x = \min\!\left(31,
+\left\lfloor 32\,\mathrm{clamp}(x,0,1)\right\rfloor\right)
+$$
+
+$$
+c_y = \min\!\left(31,
+\left\lfloor 32\,\mathrm{clamp}(y,0,1)\right\rfloor\right)
+$$
+
+$$
+c = 32c_y + c_x
+$$
+
+$$
+(r_x,r_y) = (32x-c_x,\ 32y-c_y),
+\qquad (r_x,r_y)\in[0,1]^2
+$$
+
+$$
+\widehat{x} = \frac{c_x+r_x}{32}
+$$
+
+$$
+\widehat{y} = \frac{c_y+r_y}{32}
 $$
 
 边界值 1.0 映射到最后一个 cell 且 residual 为 1.0。分类项表达全局多峰位置，
@@ -148,15 +177,21 @@ HOTKEY 使用版本化 32-key table，每 frame 最多 8 keys 且至少一个。
 Action Head 读取当前 `H_t` 和 action-local state，先预测 kind，再只激活对应参数分支：
 
 $$
-\begin{aligned}
 C_t^{\mathrm{state}}
-&= \mathrm{Attention}(Q^{\mathrm{state}}, H_t, H_t), \\
+= \mathrm{Attention}(Q^{\mathrm{state}}, H_t, H_t)
+$$
+
+$$
 C_{t,0:16}^{\mathrm{spatial}}
-&= \mathrm{Attention}(Q_{0:16}^{\mathrm{spatial}}, H_t, H_t), \\
-C_t &= f\!\left(C_t^{\mathrm{state}}, E_{t-1}^{\mathrm{frame}}\right), \\
-K_t &\sim \mathrm{Categorical}
-\left(\mathrm{KindLogits}(C_t)\right).
-\end{aligned}
+= \mathrm{Attention}(Q_{0:16}^{\mathrm{spatial}}, H_t, H_t)
+$$
+
+$$
+C_t = f\!\left(C_t^{\mathrm{state}}, E_{t-1}^{\mathrm{frame}}\right)
+$$
+
+$$
+K_t \sim \mathrm{Categorical}\left(\mathrm{KindLogits}(C_t)\right)
 $$
 
 ```text
@@ -242,19 +277,44 @@ action_hotkey_length        [B]
 一个 frame 的条件化联合 log-prob 为：
 
 $$
-\begin{aligned}
 \log p(\mathrm{frame}\mid s)
-={}& \log p(K\mid s) \\
-&+ \mathbf{1}_{\{K=\mathrm{POINTER\_MOVE}\}}
-\left[\log p(c\mid s,K)+\log p(r\mid s,K,c)\right] \\
-&+ \mathbf{1}_{\{K=\mathrm{POINTER\_BUTTON}\}}
-\left[\log p(b\mid s,K)+\log p(\varphi\mid s,K)\right] \\
-&+ \mathbf{1}_{\{K=\mathrm{SCROLL}\}}\log p(d\mid s,K) \\
-&+ \mathbf{1}_{\{K=\mathrm{TYPE}\}}
-\left[\log p(\ell\mid s,K)+\sum_i\log p(x_i\mid x_{<i},s,K,\ell)\right] \\
-&+ \mathbf{1}_{\{K=\mathrm{HOTKEY}\}}
-\left[\log p(\ell\mid s,K)+\sum_i\log p(k_i\mid k_{<i},s,K,\ell)\right].
-\end{aligned}
+= \log p(K\mid s)
++ \ell_{\mathrm{move}}
++ \ell_{\mathrm{button}}
++ \ell_{\mathrm{scroll}}
++ \ell_{\mathrm{type}}
++ \ell_{\mathrm{hotkey}}
+$$
+
+其中各 kind-conditioned 分量为：
+
+$$
+\ell_{\mathrm{move}}
+= \mathbf{1}_{\{K=\mathrm{POINTER\_MOVE}\}}
+\left[\log p(c\mid s,K)+\log p(r\mid s,K,c)\right]
+$$
+
+$$
+\ell_{\mathrm{button}}
+= \mathbf{1}_{\{K=\mathrm{POINTER\_BUTTON}\}}
+\left[\log p(b\mid s,K)+\log p(\varphi\mid s,K)\right]
+$$
+
+$$
+\ell_{\mathrm{scroll}}
+= \mathbf{1}_{\{K=\mathrm{SCROLL}\}}\log p(d\mid s,K)
+$$
+
+$$
+\ell_{\mathrm{type}}
+= \mathbf{1}_{\{K=\mathrm{TYPE}\}}
+\left[\log p(\ell\mid s,K)+\sum_i\log p(x_i\mid x_{<i},s,K,\ell)\right]
+$$
+
+$$
+\ell_{\mathrm{hotkey}}
+= \mathbf{1}_{\{K=\mathrm{HOTKEY}\}}
+\left[\log p(\ell\mid s,K)+\sum_i\log p(k_i\mid k_{<i},s,K,\ell)\right]
 $$
 
 监督目标是上述有效项的负 log-likelihood。连续参数使用有界分布的 NLL；实现可用
