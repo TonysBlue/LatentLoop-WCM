@@ -43,11 +43,14 @@ Pretrain/SFT episode 按 80 ms unit 保存。没有专家 action 的 unit 必须
 
 Pretrain 使用 teacher forcing 的结构化 frame negative log-likelihood：
 
-```text
-L_pretrain = speech_weight * (L_speech_mode + L_speech_codec)
-           + action_weight * L_action_frame
-           + 1.0 * L_JEPA
-```
+$$
+\mathcal{L}_{\mathrm{pretrain}}
+= w_{\mathrm{speech}}
+\left(\mathcal{L}_{\mathrm{speech\_mode}}
++ \mathcal{L}_{\mathrm{speech\_codec}}\right)
++ w_{\mathrm{action}}\mathcal{L}_{\mathrm{action\_frame}}
++ \mathcal{L}_{\mathrm{JEPA}}
+$$
 
 各项只在自己的有效 mask 上归一化。Speech Head、Unified Action Head、Perceiver、
 Predictor、PredictionAdapter/Future Gate、Backbone 和 WorldStateUpdate 全部按各自梯度路径
@@ -79,17 +82,23 @@ JEPA loss，两路系数分别为 0.1。SFT replay 的行为监督系数仍为 0
 
 ### 5.1 单参数 JEPA 时序
 
-在一个 optimizer 参数版本 theta_k 内：
+在一个 optimizer 参数版本 $\theta_k$ 内：
 
-```text
-P_t       = Perceiver(O_t; theta_k)
-P_(t+1)   = Perceiver(O_(t+1); theta_k)
-P_hat     = Predictor(P_t, Z_t)
-L_JEPA    = distance(P_hat, stop_grad(P_(t+1))) + variance_floor(P_t)
-```
+$$
+\begin{aligned}
+P_t &= \operatorname{Perceiver}(O_t; \theta_k), \\
+P_{t+1} &= \operatorname{Perceiver}(O_{t+1}; \theta_k), \\
+\widehat{P}_{t+1\mid t} &= \operatorname{Predictor}(P_t, Z_t), \\
+\mathcal{L}_{\mathrm{JEPA}}
+&= \operatorname{distance}\!\left(
+\widehat{P}_{t+1\mid t}, \operatorname{stopgrad}(P_{t+1})
+\right)
++ \operatorname{variance\_floor}(P_t).
+\end{aligned}
+$$
 
 完整梯度累积周期结束后才执行 `optimizer.step()`。模型时间步不等于 optimizer step；
-同一 JEPA pair 的 source 和 target 始终使用同一参数版本。P_(t+1) 在下一正常时刻仍作为
+同一 JEPA pair 的 source 和 target 始终使用同一参数版本。$P_{t+1}$ 在下一正常时刻仍作为
 可微 source 接受行为和 JEPA 梯度。
 
 监督 chunk 最后一项使用 Perceiver-only lookahead 编码下一 observation 和 audio cache 副本，

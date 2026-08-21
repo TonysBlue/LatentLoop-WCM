@@ -11,16 +11,21 @@
 
 本地平台直接实现顶层架构，不维护语义不同的过渡 head 或阶段专用训练循环：
 
-```text
-Perceiver(O_t) -> P_t
--> Z_t = WorldStateUpdate(Z_(t-1), H_(t-1))
--> P_hat_(t+1|t) = Predictor(P_t, Z_t)
--> F_t = PredictionAdapter(stop_grad(P_hat)) + E_future
--> H_t, KV_t = Backbone(P_t, Z_t, F_t, KV_(t-1))
--> Speech Head + Unified Action Head
--> masked loss + TBPTT
--> atomic checkpoint + lineage
-```
+$$
+\begin{aligned}
+P_t &= \operatorname{Perceiver}(O_t), \\
+Z_t &= \operatorname{WorldStateUpdate}(Z_{t-1}, H_{t-1}), \\
+\widehat{P}_{t+1\mid t} &= \operatorname{Predictor}(P_t, Z_t), \\
+F_t &= \operatorname{PredictionAdapter}\!\left(
+\operatorname{stopgrad}(\widehat{P}_{t+1\mid t})
+\right) + E_{\mathrm{future}}, \\
+(H_t, \mathrm{KV}_t) &= \operatorname{Backbone}
+\left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right).
+\end{aligned}
+$$
+
+$H_t$ 随后同时进入 Speech Head 和 Unified Action Head；训练使用 masked loss 与
+TBPTT，并把结果写入带 lineage 的原子 checkpoint。
 
 PyTorch 负责模型、递归状态、loss、优化和 checkpoint；WebDataset 负责按 episode 顺序提供 unit；Ray 负责 CPU 数据与环境外围任务；W&B Local 负责指标和谱系。KV、Z、H、audio cache 和两个 local state 保留在同一 GPU 进程。
 
@@ -149,15 +154,22 @@ class StreamUnit:
 
 ### 5.3 编码和状态顺序
 
-```text
-P_t                 = Perceiver(O_t)
-Z_t                 = WorldStateUpdate(Z_(t-1), H_(t-1))
-P_hat_(t+1|t)       = Predictor(P_t, Z_t)
-F_t                 = PredictionAdapter(stop_grad(P_hat_(t+1|t))) + E_future
-H_t, KV_t           = Backbone(P_t, Z_t, F_t, KV_(t-1))
-Speech_t            = SpeechHead(H_t, speech_local_(t-1))
-Action_t            = ActionHead(H_t, action_local_(t-1))
-```
+$$
+\begin{aligned}
+P_t &= \operatorname{Perceiver}(O_t), \\
+Z_t &= \operatorname{WorldStateUpdate}(Z_{t-1}, H_{t-1}), \\
+\widehat{P}_{t+1\mid t} &= \operatorname{Predictor}(P_t, Z_t), \\
+F_t &= \operatorname{PredictionAdapter}\!\left(
+\operatorname{stopgrad}(\widehat{P}_{t+1\mid t})
+\right) + E_{\mathrm{future}}, \\
+(H_t, \mathrm{KV}_t) &= \operatorname{Backbone}
+\left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right), \\
+U_t &= \left(
+\operatorname{SpeechHead}(H_t, \mathrm{speech\_local}_{t-1}),
+\operatorname{ActionHead}(H_t, \mathrm{action\_local}_{t-1})
+\right).
+\end{aligned}
+$$
 
 `P_t` 和 `H_t` 都保存16个 slots，H_t 不能被 pooled summary 替代。audio cache 是
 Perceiver 流式输入状态，不进入顶层认知状态公式。
@@ -256,7 +268,7 @@ Future Adapter 使用 `LayerNorm -> identity-initialized Linear`。每个 Future
 ### 7.3 WorldStateUpdate
 
 $$
-Z_t = U_\theta\left(Z_{t-1}, H_{t-1}\right)
+Z_t = \mathcal{U}_{\theta}\left(Z_{t-1}, H_{t-1}\right)
 $$
 
 内部使用 latent projection、对 H 的 slot cross-attention、learned slot identity、candidate 和
@@ -276,7 +288,7 @@ $$
 T_t^{\Delta} = \mathrm{DeltaTimeEncoder}(\Delta t_t)
 $$
 
-`WorldStateUpdate(Z_(t-1), H_(t-1))` 的接口不包含 `delta_t`。
+$\operatorname{WorldStateUpdate}(Z_{t-1}, H_{t-1})$ 的接口不包含 $\Delta t_t$。
 
 ### 7.4 Speech Head
 
@@ -364,13 +376,23 @@ optimizer、学习率、梯度累积、FP16、梯度裁剪和 checkpoint cadence
 
 ### 10.3 Loss 契约
 
-```text
-L_speech = L_speech_mode + L_speech_codec
-L_action = masked_structured_action_nll(action_output, action_frame)
-L_JEPA   = normalized_slot_prediction + latent_variance_floor
-L_total  = speech_weight * L_speech + action_weight * L_action
-           + stage_jepa_weight * L_JEPA
-```
+$$
+\begin{aligned}
+\mathcal{L}_{\mathrm{speech}}
+&= \mathcal{L}_{\mathrm{speech\_mode}}
++ \mathcal{L}_{\mathrm{speech\_codec}}, \\
+\mathcal{L}_{\mathrm{action}}
+&= \operatorname{MaskedStructuredActionNLL}
+\left(\mathrm{action\_output}, \mathrm{action\_frame}\right), \\
+\mathcal{L}_{\mathrm{JEPA}}
+&= \mathcal{L}_{\mathrm{normalized\_slot\_prediction}}
++ \mathcal{L}_{\mathrm{latent\_variance\_floor}}, \\
+\mathcal{L}_{\mathrm{total}}
+&= w_{\mathrm{speech}}\mathcal{L}_{\mathrm{speech}}
++ w_{\mathrm{action}}\mathcal{L}_{\mathrm{action}}
++ w_{\mathrm{JEPA}}^{(\mathrm{stage})}\mathcal{L}_{\mathrm{JEPA}}.
+\end{aligned}
+$$
 
 SILENCE unit 的 codec loss 被 mask。Action 参数按 kind 激活，连续参数 NLL 与 rollout
 log-prob 使用同一 bounded 参数化。Z 没有 memory probe、write-budget、diversity、control
@@ -403,7 +425,7 @@ TBPTT 不能短于要验证的 memory horizon；生产使用 750 units。
 
 ### 10.6 Lookahead 与参数版本
 
-chunk 内 P_(t+1) 同时作为下一时刻正常可微 source 和上一时刻 detach target。chunk 最后
+chunk 内 $P_{t+1}$ 同时作为下一时刻正常可微 source 和上一时刻 detach target。chunk 最后
 一个 source 若还有 successor，只调用同一 Perceiver 编码 O_(t+1) 和 audio cache 副本；
 不更新 Z/H/KV 并丢弃新 cache。完整梯度累积周期使用同一参数版本，只有 sync 边界执行
 optimizer step；模型 unit index 不能被当作 optimizer version。

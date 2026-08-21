@@ -122,39 +122,63 @@ SFT replay 连续 episode 稳定通用表示。两路都使用 candidate 内唯�
 使用时间折扣和 GAE：
 
 $$
-\gamma_t=\exp(-\Delta t/\tau),\quad
-\delta_t=r_t+\gamma_t m_tV_{t+1}-V_t
+\begin{aligned}
+\gamma_t &= \exp\!\left(-\frac{\Delta t_t}{\tau}\right), \\
+\delta_t &= r_t + \gamma_t m_t V_{t+1} - V_t.
+\end{aligned}
 $$
 
 $$
-A_t=\delta_t+\gamma_t\lambda m_tA_{t+1},\quad
-y_t=A_t+V_t
+\begin{aligned}
+A_t &= \delta_t + \gamma_t\lambda m_t A_{t+1}, \\
+y_t &= A_t + V_t.
+\end{aligned}
 $$
 
 对 speech unit 和 structured action frame 分别计算 ratio，再等权组合：
 
 $$
+\begin{aligned}
 \log \pi_{\mathrm{speech},t}
-=\log \pi(m_t\mid s_t)
-+\mathbf{1}[m_t=\mathrm{speech}]\sum_q\log \pi(c_{t,q}\mid s_t,m_t,c_{t,<q})
+&= \log \pi(m_t\mid s_t) \\
+&\quad + \mathbf{1}_{\{m_t=\mathrm{speech}\}}
+\sum_q \log \pi(c_{t,q}\mid s_t,m_t,c_{t,<q})
+\end{aligned}
 $$
 
 Speech mode 与当前 unit 所有有效 codec token 构成一个联合动作，因此这里必须求和，不能按
 token 数取平均；否则 PPO ratio 与 reference KL 会随 codebook 数被错误缩放。
 
 $$
-\rho_t=\exp(\log\pi_\theta(a_t|s_t)-\log\pi_{old}(a_t|s_t))
+\rho_t
+= \exp\!\left(
+\log\pi_\theta(a_t\mid s_t)
+- \log\pi_{\mathrm{old}}(a_t\mid s_t)
+\right)
 $$
 
 $$
-L_{\mathrm{actor}}=-\mathbb{E}\left[\min(\rho_tA_t,
-\mathrm{clip}(\rho_t,1-\epsilon,1+\epsilon)A_t)\right]
+\mathcal{L}_{\mathrm{actor}}
+= -\mathbb{E}\!\left[
+\min\!\left(
+\rho_t A_t,
+\operatorname{clip}(\rho_t,1-\epsilon,1+\epsilon)A_t
+\right)
+\right]
 $$
 
 $$
-L=L_{\mathrm{actor}}+c_vL_{\mathrm{value}}-c_HH(\pi)
-+\beta D_{KL}(\pi_\theta\|\pi_{SFT})+0.1L_{SFT}
-+0.1L_{JEPA,on-policy}+0.1L_{JEPA,replay}
+\begin{aligned}
+\mathcal{L}
+={}& \mathcal{L}_{\mathrm{actor}}
++ c_v\mathcal{L}_{\mathrm{value}}
+- c_H\mathcal{H}(\pi) \\
+&+ \beta D_{\mathrm{KL}}
+\left(\pi_\theta\,\|\,\pi_{\mathrm{SFT}}\right)
++ 0.1\mathcal{L}_{\mathrm{SFT}} \\
+&+ 0.1\mathcal{L}_{\mathrm{JEPA,on\text{-}policy}}
++ 0.1\mathcal{L}_{\mathrm{JEPA,replay}}.
+\end{aligned}
 $$
 
 Value Head 是训练专用组件，不跨 Model Service 物理边界输出。Reward/Judge 输出全部

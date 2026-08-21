@@ -13,14 +13,20 @@ SILENCE 由 Model Service 输出全零 80 ms PCM，Harness 不理解 Mimi。
 
 直接语音路径将模型时钟固定为 80 ms。每个 unit 接收一路 24 kHz、1920 样本的混合麦克风输入。完整状态顺序为：
 
-~~~
-P_t                 = Perceiver(O_t)
-Z_t                 = WorldStateUpdate(Z_(t-1), H_(t-1))
-P_hat_(t+1|t)       = Predictor(P_t, Z_t)
-F_t                 = PredictionAdapter(stop_grad(P_hat_(t+1|t))) + E_future
-H_t, KV_t           = Backbone(P_t, Z_t, F_t, KV_(t-1))
-speech_t            = SpeechHead(H_t, speech_local_(t-1))
-~~~
+$$
+\begin{aligned}
+P_t &= \operatorname{Perceiver}(O_t), \\
+Z_t &= \operatorname{WorldStateUpdate}(Z_{t-1}, H_{t-1}), \\
+\widehat{P}_{t+1\mid t} &= \operatorname{Predictor}(P_t, Z_t), \\
+F_t &= \operatorname{PredictionAdapter}\!\left(
+\operatorname{stopgrad}(\widehat{P}_{t+1\mid t})
+\right) + E_{\mathrm{future}}, \\
+(H_t, \mathrm{KV}_t) &= \operatorname{Backbone}
+\left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right), \\
+\mathrm{speech}_t
+&= \operatorname{SpeechHead}(H_t, \mathrm{speech\_local}_{t-1}).
+\end{aligned}
+$$
 
 Speech Head 每个 unit 预测 SILENCE 或 SPEECH。只有 SPEECH unit 输出一个 Mimi 帧，冻结的因果 decoder 将其转换为 1920 个波形采样。运行路径不经过文本或 TTS；播放回流在下一 unit 作为混合麦克风输入重新进入模型。
 
@@ -46,13 +52,13 @@ codec runtime 通过独立 worker 提供 health、reset、encode_step 和 decode
 Speech Head 使用一个 learned speech query cross-attend 当前完整 16-slot hidden，再结合上一
 时刻 speech local state。它不读取某个固定 token 位置，也不把 Perceiver slot 解释为视觉网格：
 
-~~~
-speech_context_t = Attention(speech_query, H_t)
-speech_context_t + speech_local_(t-1)
-    -> speech mode logits
-    -> causal/factorized codec logits
-    -> generated Mimi codes
-~~~
+$$
+C_t^{\mathrm{speech}}
+= \operatorname{Attention}(Q^{\mathrm{speech}}, H_t, H_t)
+$$
+
+随后，$C_t^{\mathrm{speech}}$ 与 $\mathrm{speech\_local}_{t-1}$ 共同生成 speech mode logits、
+causal/factorized codec logits 和 Mimi codes。
 
 - SILENCE：只计算 mode CE，codec logits 被 mask，不调用 codec decoder；
 - SPEECH：计算 mode CE 和 8-codebook codec CE，并解码为波形 chunk。
@@ -94,11 +100,15 @@ speech_codec_mask    [B, 1]
 
 语音相关目标只有：
 
-~~~
-L_speech = L_speech_mode + L_speech_codec
-~~~
+$$
+\mathcal{L}_{\mathrm{speech}}
+= \mathcal{L}_{\mathrm{speech\_mode}}
++ \mathcal{L}_{\mathrm{speech\_codec}}
+$$
 
-`L_speech_mode` 对有效 SILENCE/SPEECH 标签计算 CE；`L_speech_codec` 只对 SPEECH unit 的有效 frame/codebook 计算 CE。没有独立 SpeechControl、prosody、boundary、memory 或 write loss。
+$\mathcal{L}_{\mathrm{speech\_mode}}$ 对有效 SILENCE/SPEECH 标签计算 CE；
+$\mathcal{L}_{\mathrm{speech\_codec}}$ 只对 SPEECH unit 的有效 frame/codebook 计算 CE。
+没有独立 SpeechControl、prosody、boundary、memory 或 write loss。
 
 当前和未来 speech loss 通过 Speech Head、Backbone、Perceiver、Future Adapter/Gate 以及
 TBPTT 内的 WorldStateUpdate 传播。Future 分支在 Predictor 输出处 stop-gradient，因此

@@ -12,15 +12,21 @@ Unified Action Head 是模型唯一的电脑操控输出头。统一的是 Actio
 每个 unit 都产生一个完整的 `ActionFrame`，Model Service 在该 unit 内把 frame 解码成
 零个或多个有序 `ControlSignal`，Harness 校验后立即执行。
 
-```text
-P_t                 = Perceiver(O_t)
-Z_t                 = WorldStateUpdate(Z_(t-1), H_(t-1))
-P_hat_(t+1|t)       = Predictor(P_t, Z_t)
-F_t                 = PredictionAdapter(stop_grad(P_hat_(t+1|t))) + E_future
-H_t, KV_t           = Backbone(P_t, Z_t, F_t, KV_(t-1))
-frame_t             = ActionHead(H_t, action_local_(t-1))
-controls            = decode(frame_t)
-```
+$$
+\begin{aligned}
+P_t &= \operatorname{Perceiver}(O_t), \\
+Z_t &= \operatorname{WorldStateUpdate}(Z_{t-1}, H_{t-1}), \\
+\widehat{P}_{t+1\mid t} &= \operatorname{Predictor}(P_t, Z_t), \\
+F_t &= \operatorname{PredictionAdapter}\!\left(
+\operatorname{stopgrad}(\widehat{P}_{t+1\mid t})
+\right) + E_{\mathrm{future}}, \\
+(H_t, \mathrm{KV}_t) &= \operatorname{Backbone}
+\left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right), \\
+\mathrm{frame}_t
+&= \operatorname{ActionHead}(H_t, \mathrm{action\_local}_{t-1}), \\
+\mathrm{controls}_t &= \operatorname{decode}(\mathrm{frame}_t).
+\end{aligned}
+$$
 
 Action Head 不调用操作系统。Model Service 和 Harness 之间只传递物理
 `ControlSignal`，不传递模型 logits、训练 target 或 action 参数 token。
@@ -89,15 +95,19 @@ ActionFrame {
 
 绝对坐标使用 32x32 joint coarse grid categorical 和 cell 内 bounded residual：
 
-```text
-cell_x = floor(clamp(x, 0, 1) * 32)
-cell_y = floor(clamp(y, 0, 1) * 32)
-cell   = cell_y * 32 + cell_x
-residual = (x * 32 - cell_x, y * 32 - cell_y) in [0, 1]
-
-x_hat = (cell_x + residual_x) / 32
-y_hat = (cell_y + residual_y) / 32
-```
+$$
+\begin{aligned}
+c_x &= \min\!\left(31,
+\left\lfloor 32\,\operatorname{clamp}(x,0,1)\right\rfloor\right), \\
+c_y &= \min\!\left(31,
+\left\lfloor 32\,\operatorname{clamp}(y,0,1)\right\rfloor\right), \\
+c &= 32c_y + c_x, \\
+(r_x,r_y) &= (32x-c_x,\ 32y-c_y),
+\qquad (r_x,r_y)\in[0,1]^2, \\
+\widehat{x} &= \frac{c_x+r_x}{32}, \\
+\widehat{y} &= \frac{c_y+r_y}{32}.
+\end{aligned}
+$$
 
 边界值 1.0 映射到最后一个 cell 且 residual 为 1.0。分类项表达全局多峰位置，
 bounded residual 提供 cell 内精度。动态画面中的运动与动作时延由连续视觉流训练学习，
@@ -137,12 +147,19 @@ HOTKEY 使用版本化 32-key table，每 frame 最多 8 keys 且至少一个。
 
 Action Head 读取当前 `H_t` 和 action-local state，先预测 kind，再只激活对应参数分支：
 
-```text
-state_context_t = Attention(learned_state_query, H_t)
-spatial_context_t[0:16] = Attention(learned_spatial_queries[0:16], H_t)
-context_t = f(state_context_t, previous_frame_embedding)
-kind_t    ~ Categorical(kind_logits(context_t))
+$$
+\begin{aligned}
+C_t^{\mathrm{state}}
+&= \operatorname{Attention}(Q^{\mathrm{state}}, H_t, H_t), \\
+C_{t,0:16}^{\mathrm{spatial}}
+&= \operatorname{Attention}(Q_{0:16}^{\mathrm{spatial}}, H_t, H_t), \\
+C_t &= f\!\left(C_t^{\mathrm{state}}, E_{t-1}^{\mathrm{frame}}\right), \\
+K_t &\sim \operatorname{Categorical}
+\left(\operatorname{KindLogits}(C_t)\right).
+\end{aligned}
+$$
 
+```text
 POINTER_MOVE   -> spatial_context + joint cell categorical + bounded residual distribution
 POINTER_BUTTON -> button categorical + phase categorical
 SCROLL         -> bounded continuous distribution
@@ -224,27 +241,36 @@ action_hotkey_length        [B]
 
 一个 frame 的条件化联合 log-prob 为：
 
-```text
-log p(frame|state) = log p(kind|state)
-                   + 1[kind=POINTER_MOVE]   * (log p(cell) + log p(residual|cell))
-                   + 1[kind=POINTER_BUTTON] * (log p(button) + log p(phase))
-                   + 1[kind=SCROLL]         * log p(scroll)
-                   + 1[kind=TYPE]           * (log p(length) + sum_i log p(byte_i))
-                   + 1[kind=HOTKEY]         * (log p(length) + sum_i log p(key_i))
-```
+$$
+\begin{aligned}
+\log p(\mathrm{frame}\mid s)
+={}& \log p(K\mid s) \\
+&+ \mathbf{1}_{\{K=\mathrm{POINTER\_MOVE}\}}
+\left[\log p(c\mid s,K)+\log p(r\mid s,K,c)\right] \\
+&+ \mathbf{1}_{\{K=\mathrm{POINTER\_BUTTON}\}}
+\left[\log p(b\mid s,K)+\log p(\varphi\mid s,K)\right] \\
+&+ \mathbf{1}_{\{K=\mathrm{SCROLL}\}}\log p(d\mid s,K) \\
+&+ \mathbf{1}_{\{K=\mathrm{TYPE}\}}
+\left[\log p(\ell\mid s,K)+\sum_i\log p(x_i\mid x_{<i},s,K,\ell)\right] \\
+&+ \mathbf{1}_{\{K=\mathrm{HOTKEY}\}}
+\left[\log p(\ell\mid s,K)+\sum_i\log p(k_i\mid k_{<i},s,K,\ell)\right].
+\end{aligned}
+$$
 
 监督目标是上述有效项的负 log-likelihood。连续参数使用有界分布的 NLL；实现可用
 固定尺度的 bounded regression NLL，但必须和 sampling/log-prob 使用同一参数化。
-各分支先按有效 frame 归一化，再组成唯一 `L_action`，避免 TYPE 长度自动放大其权重。
+各分支先按有效 frame 归一化，再组成唯一 $\mathcal{L}_{\mathrm{action}}$，避免 TYPE 长度自动
+放大其权重。
 
 Online Recurrent PPO 保存并重算同一个 frame joint log-prob。clipped ratio 与 reference KL 以
 frame 为动作概率单位，而不是把 kind、每个 byte 和坐标重复当作独立环境 step。
 
-```text
-L_total = speech_loss_weight * L_speech
-        + action_loss_weight * L_action
-        + stage_jepa_weight * L_JEPA
-```
+$$
+\mathcal{L}_{\mathrm{total}}
+= w_{\mathrm{speech}}\mathcal{L}_{\mathrm{speech}}
++ w_{\mathrm{action}}\mathcal{L}_{\mathrm{action}}
++ w_{\mathrm{JEPA}}^{(\mathrm{stage})}\mathcal{L}_{\mathrm{JEPA}}
+$$
 
 Action loss 通过 Action Head、Backbone、Perceiver、Future Adapter/Gate 和
 WorldStateUpdate 训练行为路径；它在 predicted slots 处 stop-gradient，不训练 Predictor。
