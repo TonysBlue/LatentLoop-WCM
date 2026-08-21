@@ -47,9 +47,9 @@ $$
 \mathcal{L}_{\mathrm{pretrain}}
 = w_{\mathrm{speech}}
 \left(\mathcal{L}_{\mathrm{speech\_mode}}
-+ \mathcal{L}_{\mathrm{speech\_codec}}\right)
-+ w_{\mathrm{action}}\mathcal{L}_{\mathrm{action\_frame}}
-+ \mathcal{L}_{\mathrm{JEPA}}
+{}+ \mathcal{L}_{\mathrm{speech\_codec}}\right)
+{}+ w_{\mathrm{action}}\mathcal{L}_{\mathrm{action\_frame}}
+{}+ \mathcal{L}_{\mathrm{JEPA}}
 $$
 
 各项只在自己的有效 mask 上归一化。Speech Head、Unified Action Head、Perceiver、
@@ -101,7 +101,7 @@ $$
 = \mathrm{distance}\!\left(
 \widehat{P}_{t+1\mid t}, \mathrm{stopgrad}(P_{t+1})
 \right)
-+ \mathrm{variance\_floor}(P_t)
+{}+ \mathrm{variance\_floor}(P_t)
 $$
 
 完整梯度累积周期结束后才执行 `optimizer.step()`。模型时间步不等于 optimizer step；

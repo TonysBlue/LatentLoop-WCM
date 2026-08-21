@@ -142,7 +142,7 @@ $$
 $$
 \log \pi_{\mathrm{speech},t}
 = \log \pi(m_t\mid s_t)
-+ \mathbf{1}_{\{m_t=\mathrm{speech}\}}
+{}+ \mathbf{1}_{\{m_t=\mathrm{speech}\}}
 \sum_q \log \pi(c_{t,q}\mid s_t,m_t,c_{t,<q})
 $$
 
@@ -153,7 +153,7 @@ $$
 \rho_t
 = \exp\!\left(
 \log\pi_\theta(a_t\mid s_t)
-- \log\pi_{\mathrm{old}}(a_t\mid s_t)
+{}- \log\pi_{\mathrm{old}}(a_t\mid s_t)
 \right)
 $$
 
@@ -170,13 +170,13 @@ $$
 $$
 \mathcal{L}
 = \mathcal{L}_{\mathrm{actor}}
-+ c_v\mathcal{L}_{\mathrm{value}}
-- c_H\mathcal{H}(\pi)
-+ \beta D_{\mathrm{KL}}
+{}+ c_v\mathcal{L}_{\mathrm{value}}
+{}- c_H\mathcal{H}(\pi)
+{}+ \beta D_{\mathrm{KL}}
 \left(\pi_\theta\,\|\,\pi_{\mathrm{SFT}}\right)
-+ 0.1\mathcal{L}_{\mathrm{SFT}}
-+ 0.1\mathcal{L}_{\mathrm{JEPA,on-policy}}
-+ 0.1\mathcal{L}_{\mathrm{JEPA,replay}}
+{}+ 0.1\mathcal{L}_{\mathrm{SFT}}
+{}+ 0.1\mathcal{L}_{\mathrm{JEPA,on-policy}}
+{}+ 0.1\mathcal{L}_{\mathrm{JEPA,replay}}
 $$
 
 Value Head 是训练专用组件，不跨 Model Service 物理边界输出。Reward/Judge 输出全部

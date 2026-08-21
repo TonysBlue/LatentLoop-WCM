@@ -26,9 +26,7 @@ $$
 $$
 
 $$
-F_t = \mathrm{PredictionAdapter}\!\left(
-\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})
-\right) + E_{\mathrm{future}}
+F_t = \mathrm{PredictionAdapter}\!\left(\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})\right) + E_{\mathrm{future}}
 $$
 
 $$
@@ -116,7 +114,7 @@ speech_codec_mask    [B, 1]
 $$
 \mathcal{L}_{\mathrm{speech}}
 = \mathcal{L}_{\mathrm{speech\_mode}}
-+ \mathcal{L}_{\mathrm{speech\_codec}}
+{}+ \mathcal{L}_{\mathrm{speech\_codec}}
 $$
 
 $\mathcal{L}_{\mathrm{speech\_mode}}$ 对有效 SILENCE/SPEECH 标签计算 CE；

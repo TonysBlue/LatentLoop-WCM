@@ -24,9 +24,7 @@ $$
 $$
 
 $$
-F_t = \mathrm{PredictionAdapter}\!\left(
-\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})
-\right) + E_{\mathrm{future}}
+F_t = \mathrm{PredictionAdapter}\!\left(\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})\right) + E_{\mathrm{future}}
 $$
 
 $$
@@ -177,9 +175,7 @@ $$
 $$
 
 $$
-F_t = \mathrm{PredictionAdapter}\!\left(
-\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})
-\right) + E_{\mathrm{future}}
+F_t = \mathrm{PredictionAdapter}\!\left(\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})\right) + E_{\mathrm{future}}
 $$
 
 $$
@@ -402,7 +398,7 @@ optimizer、学习率、梯度累积、FP16、梯度裁剪和 checkpoint cadence
 $$
 \mathcal{L}_{\mathrm{speech}}
 = \mathcal{L}_{\mathrm{speech\_mode}}
-+ \mathcal{L}_{\mathrm{speech\_codec}}
+{}+ \mathcal{L}_{\mathrm{speech\_codec}}
 $$
 
 $$
@@ -414,14 +410,14 @@ $$
 $$
 \mathcal{L}_{\mathrm{JEPA}}
 = \mathcal{L}_{\mathrm{normalized\_slot\_prediction}}
-+ \mathcal{L}_{\mathrm{latent\_variance\_floor}}
+{}+ \mathcal{L}_{\mathrm{latent\_variance\_floor}}
 $$
 
 $$
 \mathcal{L}_{\mathrm{total}}
 = w_{\mathrm{speech}}\mathcal{L}_{\mathrm{speech}}
-+ w_{\mathrm{action}}\mathcal{L}_{\mathrm{action}}
-+ w_{\mathrm{JEPA}}^{(\mathrm{stage})}\mathcal{L}_{\mathrm{JEPA}}
+{}+ w_{\mathrm{action}}\mathcal{L}_{\mathrm{action}}
+{}+ w_{\mathrm{JEPA}}^{(\mathrm{stage})}\mathcal{L}_{\mathrm{JEPA}}
 $$
 
 SILENCE unit 的 codec loss 被 mask。Action 参数按 kind 激活，连续参数 NLL 与 rollout

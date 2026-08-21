@@ -45,9 +45,7 @@ $$
 $$
 
 $$
-F_t = \mathrm{PredictionAdapter}
-\left(\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})\right)
-+ E_{\mathrm{future}}
+F_t = \mathrm{PredictionAdapter}\left(\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})\right) + E_{\mathrm{future}}
 $$
 
 $$
@@ -531,9 +529,7 @@ $$
 ### 11.3 主干
 
 $$
-F_t = \mathrm{PredictionAdapter}\!\left(
-\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})
-\right) + E_{\mathrm{future}}
+F_t = \mathrm{PredictionAdapter}\!\left(\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})\right) + E_{\mathrm{future}}
 $$
 
 $$
@@ -669,7 +665,7 @@ control-plane 审计，不进入模型输入。旧 flat `action_tokens/action_to
 $$
 \mathcal{L}_{\mathrm{speech}}
 = \mathcal{L}_{\mathrm{speech\_mode}}
-+ \mathcal{L}_{\mathrm{speech\_codec}}
+{}+ \mathcal{L}_{\mathrm{speech\_codec}}
 $$
 
 mode loss 对有效 SILENCE/SPEECH 标签计算 CE；codec loss 只对 SPEECH unit 的有效 Mimi frame/codebook 计算 CE。
@@ -712,7 +708,7 @@ $$
 = \mathbb{E}_{t,s}\!\left[
 \left\|
 \mathcal{N}(\widehat{P}_{t+1\mid t,s})
-- \mathrm{stopgrad}\!\left(\mathcal{N}(P_{t+1,s})\right)
+{}- \mathrm{stopgrad}\!\left(\mathcal{N}(P_{t+1,s})\right)
 \right\|_2^2
 \right]
 $$

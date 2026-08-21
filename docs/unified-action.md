@@ -25,9 +25,7 @@ $$
 $$
 
 $$
-F_t = \mathrm{PredictionAdapter}\!\left(
-\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})
-\right) + E_{\mathrm{future}}
+F_t = \mathrm{PredictionAdapter}\!\left(\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})\right) + E_{\mathrm{future}}
 $$
 
 $$
@@ -279,11 +277,11 @@ action_hotkey_length        [B]
 $$
 \log p(\mathrm{frame}\mid s)
 = \log p(K\mid s)
-+ \ell_{\mathrm{move}}
-+ \ell_{\mathrm{button}}
-+ \ell_{\mathrm{scroll}}
-+ \ell_{\mathrm{type}}
-+ \ell_{\mathrm{hotkey}}
+{}+ \ell_{\mathrm{move}}
+{}+ \ell_{\mathrm{button}}
+{}+ \ell_{\mathrm{scroll}}
+{}+ \ell_{\mathrm{type}}
+{}+ \ell_{\mathrm{hotkey}}
 $$
 
 其中各 kind-conditioned 分量为：
@@ -328,8 +326,8 @@ frame 为动作概率单位，而不是把 kind、每个 byte 和坐标重复当
 $$
 \mathcal{L}_{\mathrm{total}}
 = w_{\mathrm{speech}}\mathcal{L}_{\mathrm{speech}}
-+ w_{\mathrm{action}}\mathcal{L}_{\mathrm{action}}
-+ w_{\mathrm{JEPA}}^{(\mathrm{stage})}\mathcal{L}_{\mathrm{JEPA}}
+{}+ w_{\mathrm{action}}\mathcal{L}_{\mathrm{action}}
+{}+ w_{\mathrm{JEPA}}^{(\mathrm{stage})}\mathcal{L}_{\mathrm{JEPA}}
 $$
 
 Action loss 通过 Action Head、Backbone、Perceiver、Future Adapter/Gate 和
