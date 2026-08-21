@@ -34,19 +34,19 @@ readiness，不隶属于 Training System。
 
 $$
 \begin{aligned}
-P_t &= \operatorname{Perceiver}(O_t), \\
-Z_t &= \operatorname{WorldStateUpdate}(Z_{t-1}, H_{t-1}), \\
-\widehat{P}_{t+1\mid t} &= \operatorname{Predictor}(P_t, Z_t), \\
-F_t &= \operatorname{PredictionAdapter}
-\left(\operatorname{stopgrad}(\widehat{P}_{t+1\mid t})\right)
+P_t &= \mathrm{Perceiver}(O_t), \\
+Z_t &= \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1}), \\
+\widehat{P}_{t+1\mid t} &= \mathrm{Predictor}(P_t, Z_t), \\
+F_t &= \mathrm{PredictionAdapter}
+\left(\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})\right)
 + E_{\mathrm{future}}, \\
-(H_t, \mathrm{KV}_t) &= \operatorname{Backbone}
+(H_t, \mathrm{KV}_t) &= \mathrm{Backbone}
 \left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right), \\
 U_t &= \left(
-\operatorname{SpeechHead}(H_t, \mathrm{speech\_local}_{t-1}),
-\operatorname{ActionHead}(H_t, \mathrm{action\_local}_{t-1})
+\mathrm{SpeechHead}(H_t, \mathrm{speech\_local}_{t-1}),
+\mathrm{ActionHead}(H_t, \mathrm{action\_local}_{t-1})
 \right), \\
-O_{t+1} &= \operatorname{Environment}(O_t, U_t).
+O_{t+1} &= \mathrm{Environment}(O_t, U_t).
 \end{aligned}
 $$
 
@@ -135,7 +135,7 @@ parameters = kind-conditioned coordinate/button/scroll/text/key fields
 | 符号 | 含义 |
 |---|---|
 | $O_t$ | 当前混合音频、屏幕和时间观测 |
-| $P_t$ | $\operatorname{Perceiver}(O_t)$ 的 16 个多模态 slots |
+| $P_t$ | $\mathrm{Perceiver}(O_t)$ 的 16 个多模态 slots |
 | $\widehat{P}_{t+1\mid t}$ | Predictor 对下一时刻 Perceiver slots 的预测 |
 | $F_t$ | stop-gradient 后经过适配的独立 Future slots |
 | $\mathrm{KV}_t$ | 有界逐层 Transformer Key/Value Cache |
@@ -312,8 +312,8 @@ Future 分支定义为：
 
 $$
 \begin{aligned}
-Q_t^{(l)} &= \operatorname{LayerNorm}(H_t^{(l)}), \\
-C_t^{(l)} &= \operatorname{FutureCrossAttention}(Q_t^{(l)}, F_t, F_t).
+Q_t^{(l)} &= \mathrm{LayerNorm}(H_t^{(l)}), \\
+C_t^{(l)} &= \mathrm{FutureCrossAttention}(Q_t^{(l)}, F_t, F_t).
 \end{aligned}
 $$
 
@@ -336,7 +336,7 @@ $-4$，使训练初期预测先验只以小残差
 Predictor 读取 P_t 和 Z_t，以固定 slot 顺序预测一个 80 ms 后的 Perceiver 表示：
 
 $$
-\widehat{P}_{t+1\mid t} = \operatorname{Predictor}(P_t, Z_t)
+\widehat{P}_{t+1\mid t} = \mathrm{Predictor}(P_t, Z_t)
 $$
 
 Perceiver 只有一份参数，不维护 EMA teacher。预测输出一方面以未截断形式参与 JEPA loss，
@@ -487,27 +487,27 @@ Harness control-plane 操作，不是模型 action kind。
 
 $$
 \begin{aligned}
-P_t &= \operatorname{Perceiver}(O_t), \\
-\widehat{P}_{t+1\mid t} &= \operatorname{Predictor}(P_t, Z_t).
+P_t &= \mathrm{Perceiver}(O_t), \\
+\widehat{P}_{t+1\mid t} &= \mathrm{Predictor}(P_t, Z_t).
 \end{aligned}
 $$
 
 ### 11.2 记忆
 
 $$
-Z_t = \operatorname{WorldStateUpdate}(Z_{t-1}, H_{t-1})
+Z_t = \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1})
 $$
 
 ### 11.3 主干
 
 $$
-F_t = \operatorname{PredictionAdapter}\!\left(
-\operatorname{stopgrad}(\widehat{P}_{t+1\mid t})
+F_t = \mathrm{PredictionAdapter}\!\left(
+\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})
 \right) + E_{\mathrm{future}}
 $$
 
 $$
-(H_t, \mathrm{KV}_t) = \operatorname{Backbone}
+(H_t, \mathrm{KV}_t) = \mathrm{Backbone}
 \left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right)
 $$
 
@@ -515,15 +515,15 @@ $$
 
 $$
 U_t = \left(
-\operatorname{SpeechHead}(H_t, \mathrm{speech\_local}_{t-1}),
-\operatorname{ActionHead}(H_t, \mathrm{action\_local}_{t-1})
+\mathrm{SpeechHead}(H_t, \mathrm{speech\_local}_{t-1}),
+\mathrm{ActionHead}(H_t, \mathrm{action\_local}_{t-1})
 \right)
 $$
 
 ### 11.5 状态保存
 
 $$
-\operatorname{state}_{t+1} = \left(
+\mathrm{state}_{t+1} = \left(
 Z_t, H_t, \mathrm{KV}_t, \mathrm{audio\_cache}_t,
 \mathrm{speech\_local}_t, \mathrm{action\_local}_t
 \right)
@@ -542,7 +542,7 @@ KV 统一保留最近配置窗口：
 
 $$
 \mathrm{KV}_t
-= \operatorname{CURRENT\_SLOTS}[t-\mathrm{kv\_units}+1:t]
+= \mathrm{CURRENT\_SLOTS}[t-\mathrm{kv\_units}+1:t]
 $$
 
 生产上下文为 750 units（60 秒），每个 unit 固定 16 个 slots。KV 按完整 unit 淘汰，
@@ -682,7 +682,7 @@ $$
 = \mathbb{E}_{t,s}\!\left[
 \left\|
 \mathcal{N}(\widehat{P}_{t+1\mid t,s})
-- \operatorname{stopgrad}\!\left(\mathcal{N}(P_{t+1,s})\right)
+- \mathrm{stopgrad}\!\left(\mathcal{N}(P_{t+1,s})\right)
 \right\|_2^2
 \right]
 $$
@@ -694,7 +694,7 @@ $\mathcal{N}(X)=X/\max(\lVert X\rVert_2,10^{-4})$。为防止单参数 Perceiver
 $$
 \begin{aligned}
 \sigma_{s,d}
-&= \sqrt{\operatorname{Var}_{b,t}(P_{t,s,d}) + 10^{-4}}, \\
+&= \sqrt{\mathrm{Var}_{b,t}(P_{t,s,d}) + 10^{-4}}, \\
 \mathcal{L}_{\mathrm{var}}
 &= \mathbb{E}_{s,d}\!\left[\max(0, 1-\sigma_{s,d})\right].
 \end{aligned}
@@ -790,7 +790,7 @@ MiniCPM 或同类多模态主干可以提供视觉编码、音频编码、Percei
 
 1. 固定 80 ms unit；
 2. 完整 H_t 暂存；
-3. $Z_t = \operatorname{WorldStateUpdate}(Z_{t-1}, H_{t-1})$；
+3. $Z_t = \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1})$；
 4. 独立 Speech Head；
 5. Unified Action Head；
 6. 单路混合麦克风输入；

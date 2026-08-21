@@ -162,7 +162,7 @@ $$
 = -\mathbb{E}\!\left[
 \min\!\left(
 \rho_t A_t,
-\operatorname{clip}(\rho_t,1-\epsilon,1+\epsilon)A_t
+\mathrm{clip}(\rho_t,1-\epsilon,1+\epsilon)A_t
 \right)
 \right]
 $$

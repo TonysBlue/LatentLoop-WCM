@@ -15,16 +15,16 @@ SILENCE 由 Model Service 输出全零 80 ms PCM，Harness 不理解 Mimi。
 
 $$
 \begin{aligned}
-P_t &= \operatorname{Perceiver}(O_t), \\
-Z_t &= \operatorname{WorldStateUpdate}(Z_{t-1}, H_{t-1}), \\
-\widehat{P}_{t+1\mid t} &= \operatorname{Predictor}(P_t, Z_t), \\
-F_t &= \operatorname{PredictionAdapter}\!\left(
-\operatorname{stopgrad}(\widehat{P}_{t+1\mid t})
+P_t &= \mathrm{Perceiver}(O_t), \\
+Z_t &= \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1}), \\
+\widehat{P}_{t+1\mid t} &= \mathrm{Predictor}(P_t, Z_t), \\
+F_t &= \mathrm{PredictionAdapter}\!\left(
+\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})
 \right) + E_{\mathrm{future}}, \\
-(H_t, \mathrm{KV}_t) &= \operatorname{Backbone}
+(H_t, \mathrm{KV}_t) &= \mathrm{Backbone}
 \left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right), \\
 \mathrm{speech}_t
-&= \operatorname{SpeechHead}(H_t, \mathrm{speech\_local}_{t-1}).
+&= \mathrm{SpeechHead}(H_t, \mathrm{speech\_local}_{t-1}).
 \end{aligned}
 $$
 
@@ -54,7 +54,7 @@ Speech Head 使用一个 learned speech query cross-attend 当前完整 16-slot 
 
 $$
 C_t^{\mathrm{speech}}
-= \operatorname{Attention}(Q^{\mathrm{speech}}, H_t, H_t)
+= \mathrm{Attention}(Q^{\mathrm{speech}}, H_t, H_t)
 $$
 
 随后，$C_t^{\mathrm{speech}}$ 与 $\mathrm{speech\_local}_{t-1}$ 共同生成 speech mode logits、

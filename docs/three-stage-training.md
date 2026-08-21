@@ -86,14 +86,14 @@ JEPA loss，两路系数分别为 0.1。SFT replay 的行为监督系数仍为 0
 
 $$
 \begin{aligned}
-P_t &= \operatorname{Perceiver}(O_t; \theta_k), \\
-P_{t+1} &= \operatorname{Perceiver}(O_{t+1}; \theta_k), \\
-\widehat{P}_{t+1\mid t} &= \operatorname{Predictor}(P_t, Z_t), \\
+P_t &= \mathrm{Perceiver}(O_t; \theta_k), \\
+P_{t+1} &= \mathrm{Perceiver}(O_{t+1}; \theta_k), \\
+\widehat{P}_{t+1\mid t} &= \mathrm{Predictor}(P_t, Z_t), \\
 \mathcal{L}_{\mathrm{JEPA}}
-&= \operatorname{distance}\!\left(
-\widehat{P}_{t+1\mid t}, \operatorname{stopgrad}(P_{t+1})
+&= \mathrm{distance}\!\left(
+\widehat{P}_{t+1\mid t}, \mathrm{stopgrad}(P_{t+1})
 \right)
-+ \operatorname{variance\_floor}(P_t).
++ \mathrm{variance\_floor}(P_t).
 \end{aligned}
 $$
 

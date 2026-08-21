@@ -14,17 +14,17 @@ Unified Action Head 是模型唯一的电脑操控输出头。统一的是 Actio
 
 $$
 \begin{aligned}
-P_t &= \operatorname{Perceiver}(O_t), \\
-Z_t &= \operatorname{WorldStateUpdate}(Z_{t-1}, H_{t-1}), \\
-\widehat{P}_{t+1\mid t} &= \operatorname{Predictor}(P_t, Z_t), \\
-F_t &= \operatorname{PredictionAdapter}\!\left(
-\operatorname{stopgrad}(\widehat{P}_{t+1\mid t})
+P_t &= \mathrm{Perceiver}(O_t), \\
+Z_t &= \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1}), \\
+\widehat{P}_{t+1\mid t} &= \mathrm{Predictor}(P_t, Z_t), \\
+F_t &= \mathrm{PredictionAdapter}\!\left(
+\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})
 \right) + E_{\mathrm{future}}, \\
-(H_t, \mathrm{KV}_t) &= \operatorname{Backbone}
+(H_t, \mathrm{KV}_t) &= \mathrm{Backbone}
 \left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right), \\
 \mathrm{frame}_t
-&= \operatorname{ActionHead}(H_t, \mathrm{action\_local}_{t-1}), \\
-\mathrm{controls}_t &= \operatorname{decode}(\mathrm{frame}_t).
+&= \mathrm{ActionHead}(H_t, \mathrm{action\_local}_{t-1}), \\
+\mathrm{controls}_t &= \mathrm{decode}(\mathrm{frame}_t).
 \end{aligned}
 $$
 
@@ -98,9 +98,9 @@ ActionFrame {
 $$
 \begin{aligned}
 c_x &= \min\!\left(31,
-\left\lfloor 32\,\operatorname{clamp}(x,0,1)\right\rfloor\right), \\
+\left\lfloor 32\,\mathrm{clamp}(x,0,1)\right\rfloor\right), \\
 c_y &= \min\!\left(31,
-\left\lfloor 32\,\operatorname{clamp}(y,0,1)\right\rfloor\right), \\
+\left\lfloor 32\,\mathrm{clamp}(y,0,1)\right\rfloor\right), \\
 c &= 32c_y + c_x, \\
 (r_x,r_y) &= (32x-c_x,\ 32y-c_y),
 \qquad (r_x,r_y)\in[0,1]^2, \\
@@ -150,12 +150,12 @@ Action Head 读取当前 `H_t` 和 action-local state，先预测 kind，再只�
 $$
 \begin{aligned}
 C_t^{\mathrm{state}}
-&= \operatorname{Attention}(Q^{\mathrm{state}}, H_t, H_t), \\
+&= \mathrm{Attention}(Q^{\mathrm{state}}, H_t, H_t), \\
 C_{t,0:16}^{\mathrm{spatial}}
-&= \operatorname{Attention}(Q_{0:16}^{\mathrm{spatial}}, H_t, H_t), \\
+&= \mathrm{Attention}(Q_{0:16}^{\mathrm{spatial}}, H_t, H_t), \\
 C_t &= f\!\left(C_t^{\mathrm{state}}, E_{t-1}^{\mathrm{frame}}\right), \\
-K_t &\sim \operatorname{Categorical}
-\left(\operatorname{KindLogits}(C_t)\right).
+K_t &\sim \mathrm{Categorical}
+\left(\mathrm{KindLogits}(C_t)\right).
 \end{aligned}
 $$
 

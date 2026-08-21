@@ -13,13 +13,13 @@
 
 $$
 \begin{aligned}
-P_t &= \operatorname{Perceiver}(O_t), \\
-Z_t &= \operatorname{WorldStateUpdate}(Z_{t-1}, H_{t-1}), \\
-\widehat{P}_{t+1\mid t} &= \operatorname{Predictor}(P_t, Z_t), \\
-F_t &= \operatorname{PredictionAdapter}\!\left(
-\operatorname{stopgrad}(\widehat{P}_{t+1\mid t})
+P_t &= \mathrm{Perceiver}(O_t), \\
+Z_t &= \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1}), \\
+\widehat{P}_{t+1\mid t} &= \mathrm{Predictor}(P_t, Z_t), \\
+F_t &= \mathrm{PredictionAdapter}\!\left(
+\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})
 \right) + E_{\mathrm{future}}, \\
-(H_t, \mathrm{KV}_t) &= \operatorname{Backbone}
+(H_t, \mathrm{KV}_t) &= \mathrm{Backbone}
 \left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right).
 \end{aligned}
 $$
@@ -156,17 +156,17 @@ class StreamUnit:
 
 $$
 \begin{aligned}
-P_t &= \operatorname{Perceiver}(O_t), \\
-Z_t &= \operatorname{WorldStateUpdate}(Z_{t-1}, H_{t-1}), \\
-\widehat{P}_{t+1\mid t} &= \operatorname{Predictor}(P_t, Z_t), \\
-F_t &= \operatorname{PredictionAdapter}\!\left(
-\operatorname{stopgrad}(\widehat{P}_{t+1\mid t})
+P_t &= \mathrm{Perceiver}(O_t), \\
+Z_t &= \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1}), \\
+\widehat{P}_{t+1\mid t} &= \mathrm{Predictor}(P_t, Z_t), \\
+F_t &= \mathrm{PredictionAdapter}\!\left(
+\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})
 \right) + E_{\mathrm{future}}, \\
-(H_t, \mathrm{KV}_t) &= \operatorname{Backbone}
+(H_t, \mathrm{KV}_t) &= \mathrm{Backbone}
 \left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right), \\
 U_t &= \left(
-\operatorname{SpeechHead}(H_t, \mathrm{speech\_local}_{t-1}),
-\operatorname{ActionHead}(H_t, \mathrm{action\_local}_{t-1})
+\mathrm{SpeechHead}(H_t, \mathrm{speech\_local}_{t-1}),
+\mathrm{ActionHead}(H_t, \mathrm{action\_local}_{t-1})
 \right).
 \end{aligned}
 $$
@@ -288,7 +288,7 @@ $$
 T_t^{\Delta} = \mathrm{DeltaTimeEncoder}(\Delta t_t)
 $$
 
-$\operatorname{WorldStateUpdate}(Z_{t-1}, H_{t-1})$ 的接口不包含 $\Delta t_t$。
+$\mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1})$ 的接口不包含 $\Delta t_t$。
 
 ### 7.4 Speech Head
 
@@ -382,7 +382,7 @@ $$
 &= \mathcal{L}_{\mathrm{speech\_mode}}
 + \mathcal{L}_{\mathrm{speech\_codec}}, \\
 \mathcal{L}_{\mathrm{action}}
-&= \operatorname{MaskedStructuredActionNLL}
+&= \mathrm{MaskedStructuredActionNLL}
 \left(\mathrm{action\_output}, \mathrm{action\_frame}\right), \\
 \mathcal{L}_{\mathrm{JEPA}}
 &= \mathcal{L}_{\mathrm{normalized\_slot\_prediction}}
