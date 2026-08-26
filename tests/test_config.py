@@ -106,6 +106,15 @@ def test_online_rl_uses_the_online_recurrent_ppo_algorithm() -> None:
         load_config("configs/smoke.yaml", ["training.rl.algorithm=recurrent_ppo"])
 
 
+def test_formal_canary_training_requires_cuda(monkeypatch: pytest.MonkeyPatch) -> None:
+    import torch
+    from training.training import train
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    with pytest.raises(RuntimeError, match="requires a CUDA GPU"):
+        train(load_config("configs/stages/canary-pretrain.yaml"))
+
+
 def test_config_rejects_incompatible_attention_width() -> None:
     with pytest.raises(ValueError, match="divisible"):
         load_config("configs/smoke.yaml", ["model.model_dim=63"])
