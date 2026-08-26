@@ -46,6 +46,15 @@ ZH_COPY = {
         "可以先建立备份再处理。",
     ),
 }
+
+_FORMAL_DURATION_COUNTS = {
+    ("zh", "train"): (48, 19, 9),
+    ("zh", "validation"): (6, 3, 1),
+    ("zh", "test"): (6, 2, 2),
+    ("en", "train"): (9, 4, 6),
+    ("en", "validation"): (1, 1, 0),
+    ("en", "test"): (2, 1, 0),
+}
 EN_COPY = {
     "browser_search": (
         "Search for today's weather.",
@@ -275,6 +284,7 @@ def _calibrate_plan_mix(plans: list[dict[str, Any]], dataset: str) -> None:
 def _plan(
     dataset: str,
     index: int,
+    duration_class: str,
     language: str,
     intent: str,
     split: str,
@@ -304,18 +314,13 @@ def _plan(
                 {"turn_id": "turn-05", "role": "assistant", "text": copy[2]},
             ]
         )
-    if index % 20 < 12:
-        duration_class = "short"
-        duration_seconds = 4 + index % 9
-    elif index % 20 < 17:
-        duration_class = "medium"
-        duration_seconds = 16 + index % 9
-    else:
-        duration_class = "long"
-        duration_seconds = 32 + index % 9
+    duration_seconds = {
+        "short": 4 + index % 9,
+        "medium": 16 + index % 9,
+        "long": 32 + index % 9,
+    }[duration_class]
     category = "screen_task" if fixture and index in {0, 9, 10} else "synthetic_dialogue"
-    # IDs are global within the data catalog so Pilot exclusion cannot be bypassed
-    # by generating Canary and Pilot in separate commands.
+    # IDs are stable within the Canary data catalog.
     plan_id = f"plan-{language}-{plan_offset + index:04d}"
     template_id = f"{dataset}-{intent}-{split}-v{index % 7}"
     scenario_id = f"{dataset}-{split}-{intent}-{index:04d}"
@@ -335,7 +340,7 @@ def _plan(
         # gates downstream; there is no manual approval state in this pipeline.
         "quality": {
             "status": "generated",
-            "generator": "latentloop-pilot-text-v1",
+            "generator": "latentloop-canary-text-v1",
             "fixture": fixture,
         },
     }
@@ -343,39 +348,51 @@ def _plan(
     return value
 
 
-def build_pilot_text(
+def build_canary_text(
     root: str | Path,
     *,
-    dataset: str,
     fixture: bool = False,
     seed: int = 17,
 ) -> dict[str, Any]:
-    if dataset not in {"canary", "pilot"}:
-        raise ValueError("dataset must be canary or pilot")
+    dataset = "canary"
     root = Path(root).expanduser().resolve()
     ensure_tree(root)
     if fixture:
         language_counts = {"zh": 12, "en": 12}
-    elif dataset == "pilot":
-        language_counts = {"zh": 960, "en": 240}
     else:
         language_counts = {"zh": 96, "en": 24}
     plans: list[dict[str, Any]] = []
+    duration_offsets: dict[tuple[str, str], int] = {}
     if fixture:
-        offsets = {"canary": {"zh": 0, "en": 0}, "pilot": {"zh": 12, "en": 12}}
+        offsets = {"canary": {"zh": 0, "en": 0}}
     else:
-        offsets = {"canary": {"zh": 0, "en": 0}, "pilot": {"zh": 96, "en": 24}}
+        offsets = {"canary": {"zh": 0, "en": 0}}
     for language, count in language_counts.items():
         intents = _weighted_intents(count)
         random.Random(seed + (0 if language == "zh" else 1)).shuffle(intents)
         for index in range(count):
+            split = _split(index, count)
+            duration_offset = duration_offsets.get((language, split), 0)
+            if fixture:
+                duration_class = "short"
+            else:
+                short_count, medium_count, _ = _FORMAL_DURATION_COUNTS[(language, split)]
+                duration_class = (
+                    "short"
+                    if duration_offset < short_count
+                    else "medium"
+                    if duration_offset < short_count + medium_count
+                    else "long"
+                )
+            duration_offsets[(language, split)] = duration_offset + 1
             plans.append(
                 _plan(
                     dataset,
                     index,
+                    duration_class,
                     language,
                     intents[index],
-                    _split(index, count),
+                    split,
                     fixture,
                     offsets[dataset][language],
                 )

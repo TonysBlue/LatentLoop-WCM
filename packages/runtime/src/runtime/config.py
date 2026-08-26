@@ -28,7 +28,7 @@ class ModelConfig:
     world_state_update_type: str = "gated_residual"
     delta_time_fourier_bands: int = 8
     delta_time_base_period_ms: int = 80
-    # Production streaming profile retains the most recent 60 seconds.
+    # The formal Canary profile retains the most recent 60 seconds.
     kv_units: int = 750
     kv_window_ms: int = 60_000
     speech_frames_per_unit: int = 1
@@ -218,13 +218,10 @@ class ProjectConfig:
         if self.data.dataset not in {
             "synthetic",
             "canary",
-            "pilot",
-            "production",
             "direct-speech-overfit",
         }:
             raise ValueError(
-                "data.dataset must be synthetic, canary, pilot, production, "
-                "or direct-speech-overfit"
+                "data.dataset must be synthetic, canary, or direct-speech-overfit"
             )
         if self.data.source not in {"synthetic", "webdataset"}:
             raise ValueError("data.source must be synthetic or webdataset")
@@ -267,7 +264,7 @@ class ProjectConfig:
             raise ValueError("backbone_train_mode must be frozen, selective, or all")
         if self.training.stage not in {"pretrain", "sft", "rl"}:
             raise ValueError("training.stage must be pretrain, sft, or rl")
-        if self.data.dataset in {"canary", "pilot", "production"}:
+        if self.data.dataset == "canary":
             if self.training.backbone_train_mode != "all":
                 raise ValueError(
                     "formal stages must train the full model with backbone_train_mode=all"
@@ -299,11 +296,7 @@ class ProjectConfig:
             or any(character not in "0123456789abcdef" for character in rl.rubric_sha256)
         ):
             raise ValueError("PPO requires a locked Judge revision and rubric SHA-256")
-        if self.training.stage == "rl" and self.data.dataset in {
-            "canary",
-            "pilot",
-            "production",
-        }:
+        if self.training.stage == "rl" and self.data.dataset == "canary":
             if (
                 not rl.environment_socket
                 or not rl.codec_socket
@@ -346,10 +339,9 @@ class ProjectConfig:
         if self.training.tbptt_units != self.training.memory_horizon_units:
             raise ValueError("tbptt_units must equal memory_horizon_units")
         if (
-            self.data.dataset in {"canary", "pilot", "production"}
-            and self.training.memory_horizon_units != 750
+            self.data.dataset == "canary" and self.training.memory_horizon_units != 750
         ):
-            raise ValueError("production memory horizon must be exactly 750 units")
+            raise ValueError("formal Canary memory horizon must be exactly 750 units")
         if not 0 <= self.training.min_learning_rate_ratio <= 1:
             raise ValueError("min_learning_rate_ratio must be in [0, 1]")
         if not 0 <= self.training.warmup_ratio < 1:

@@ -44,13 +44,18 @@ def test_stage_jepa_weights_are_fixed() -> None:
         )
 
 
-def test_local_dev_and_production_profiles_are_explicit() -> None:
+def test_local_dev_and_canary_profiles_are_explicit() -> None:
     local = load_config("configs/local-dev.yaml")
-    production = load_config("configs/production.yaml")
+    canary = load_config("configs/canary.yaml")
     assert local.data.dataset == "synthetic"
-    assert production.data.dataset == "production"
-    assert production.model.model_dim == 896
-    assert production.model.action_schema_id == "structured-action-v1"
+    assert canary.data.dataset == "canary"
+    assert canary.model.action_schema_id == "structured-action-v1"
+
+
+@pytest.mark.parametrize("removed_scale", ["pilot", "production"])
+def test_removed_scales_are_rejected(removed_scale: str) -> None:
+    with pytest.raises(ValueError, match="synthetic, canary, or direct-speech-overfit"):
+        load_config("configs/smoke.yaml", [f"data.dataset={removed_scale}"])
 
 
 def test_training_stage_is_the_only_top_level_dispatch_key() -> None:
@@ -73,9 +78,8 @@ def test_formal_rl_requires_real_environment_configuration() -> None:
         )
 
 
-@pytest.mark.parametrize("profile", ["canary", "pilot", "production"])
-def test_formal_rl_environment_identity_matches_harness_service(profile: str) -> None:
-    training = load_config(f"configs/{profile}.yaml")
+def test_formal_rl_environment_identity_matches_harness_service() -> None:
+    training = load_config("configs/canary.yaml")
     assert training.training.rl.environment_id == "isolated-qemu-v1"
 
 

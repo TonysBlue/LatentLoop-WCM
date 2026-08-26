@@ -23,7 +23,7 @@
 ~/latentloop-data/assets/sources/  固定公开数据下载缓存
 ~/latentloop-data/assets/models/   CosyVoice2、SenseVoice、Mimi 权重
 ~/latentloop-data/assets/vendor/   固定 revision 的 CosyVoice 源码
-~/latentloop-data/datasets/        当前 Canary/Pilot 数据集
+~/latentloop-data/datasets/        当前 Canary 数据集
 ~/latentloop-data/experiments/     checkpoint、评测、日志和 W&B run
 ~/latentloop-data/runtime/         worker socket 与服务日志
 ```
@@ -98,8 +98,8 @@ scripts/run-training.sh --recipe configs/recipes/canary.yaml --run-id canary-001
 Pretrain 从随机初始化开始；SFT 自动使用 Pretrain checkpoint；Online RL 自动使用最终
 SFT checkpoint 作为 policy 和冻结 reference。
 
-三个正式 stage 与 Pilot/Production 使用同一条连续 episode 路径：按时间顺序处理每个 episode，持续传递 KV、
-latent、H、speech-local 和 action-local state。生产配置的 `tbptt_units=750` 与
+三个正式 stage 使用同一条连续 episode 路径：按时间顺序处理每个 episode，持续传递 KV、
+latent、H、speech-local 和 action-local state。Canary 配置的 `tbptt_units=750` 与
 `memory_horizon_units=750`，确保未来输出 loss 可以回传到长期记忆更新器；smoke 只缩小该数值。
 W&B 中记录 speech mode、有效 codec 帧和 action frame 的监督密度。
 训练只使用 speech mode/codec 与 structured action frame loss；长期记忆没有独立
@@ -125,9 +125,9 @@ target 或正则项。cosine 学习率最低保持为初始值的 10%。
 最后一次训练指标、W&B 实际模式和 run URL。最小闭环只证明真实数据、codec、训练、
 checkpoint 和评测链路可运行；此时 codec accuracy、macro-F1 等质量指标不用于判断收敛。
 
-Pilot 和 Production 使用完全相同的当前数据准备路径；Production 必须先提供锁定的真实
-source manifest、锁定 Reward Judge identity/rubric、session manifest 和 Mimi worker。缺少任一
-外部资产时命令以非零状态退出。
+本阶段只验收 Canary。必须提供锁定的真实 source manifest、Reward Judge identity/rubric、
+session manifest 和 Mimi worker；缺少任一外部资产时命令以非零状态退出。完成本机报告前
+不定义下一规模，报告至少覆盖各阶段耗时、吞吐、consumed units、监督密度、峰值显存和评测计数。
 
 ## 自定义目录
 

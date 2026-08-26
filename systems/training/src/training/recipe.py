@@ -18,7 +18,7 @@ from training.evaluation import build_evaluation_report, evaluate_checkpoint
 from training.training import train
 
 _FORMAL_STAGES = ("pretrain", "sft", "rl")
-_THREE_STAGE_DATASETS = {"synthetic", "canary", "pilot", "production"}
+_THREE_STAGE_DATASETS = {"synthetic", "canary"}
 
 
 @dataclass(frozen=True, slots=True)

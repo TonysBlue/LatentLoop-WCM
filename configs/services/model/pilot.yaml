@@ -1,3 +1,0 @@
-config: ../../pilot.yaml
-socket: ~/latentloop-data/runtime/pilot/model-service.sock
-device: cuda:0

@@ -1,7 +1,7 @@
 # 统一三阶段训练架构
 
 > 状态：最终目标训练契约
-> 日期：2026-08-20
+> 日期：2026-08-26
 > 关联文档：[实时流多模态 LatentLoop](realtime-multimodal-latent-loop.md) · [Online RL：Online Recurrent PPO 与隔离环境](online-recurrent-ppo-training.md)
 
 ## 1. 总体定义
@@ -12,11 +12,11 @@ LatentLoop 的正式训练顺序固定为：
 Pretrain -> SFT -> Online RL
 ```
 
-Canary、Pilot、Production 都完整执行相同的三个阶段。它们使用同一模型语义、
-同一 `training.py::train`、同一 `recipe.py::run_recipe`、同一环境协议、同一
-reward 公式和同一 checkpoint 格式。Online RL 的当前正式算法固定为
-Online Recurrent PPO。规模之间只改变数据数量、更新数、PPO 窗口和计算
-资源，不改变单 active lifetime 或训练目标。
+Canary 是当前唯一正式规模，完整执行三个阶段。它使用统一的模型语义、
+`training.py::train`、`recipe.py::run_recipe`、环境协议、reward 公式和 checkpoint 格式。
+Online RL 的当前正式算法固定为 Online Recurrent PPO。先在本机验证数据准备、三个阶段、
+真实隔离环境、谱系、评测、吞吐和显存闭环；形成证据前不维护更大规模的配置、recipe 或
+资产入口。后续规模设计必须先更新本文、测试契约和资源预算，再添加新 profile。
 
 模型运行时始终只有两个输出头：Speech Head 直接输出 speech mode 与 Mimi codec token；
 Unified Action Head 通过一个结构化 ActionFrame schema 输出全部电脑操作。RL 的 Value Head
@@ -174,26 +174,29 @@ warm-start 任意权重。
 Pretrain/SFT checkpoint 的 `algorithm=null`；Online RL checkpoint 的
 `algorithm=online_recurrent_ppo`。checkpoint 不保存 `objective` 字段。
 
-## 8. 三种规模配置
+## 8. Canary 本机验证规模
 
-| 参数 | Canary | Pilot | Production |
-|---|---:|---:|---:|
-| Pretrain updates | 1,000 | 50,000 | 100,000 |
-| SFT updates | 600 | 30,000 | 60,000 |
-| Online RL updates | 400 | 20,000 | 40,000 |
-| PPO window | 750 units | 750 units | 750 units |
-| active lifetime | 1 | 1 | 1 |
-| memory / rollout horizon | 750 units | 750 units | 750 units |
+| 参数 | Canary |
+|---|---:|
+| Pretrain updates | 1,000 |
+| SFT updates | 600 |
+| Online RL updates | 400 |
+| PPO window | 750 units |
+| active lifetime | 1 |
+| memory / rollout horizon | 750 units |
 
 Canary 是完整训练链的小规模证明，不是删减版算法。它同样使用真实隔离电脑环境和
-连续生命期窗口；只减少数据量、窗口数和 update 数。
+连续生命期窗口。验收报告必须记录实际数据量、三个阶段的 update/consumed units、
+supervision density、评测 episode/speech-frame 数、elapsed time、units/s、峰值显存和 W&B
+模式。这些本机结果是后续讨论模型宽度、数据量、更新预算和硬件资源的唯一规模基线。
 
 ## 9. 测试契约
 
 实现必须由以下测试保护：
 
 - 配置拒绝错误 stage/algorithm、正式 RL 缺失环境/Judge identity/socket、非法 PPO 参数；
-- 三个正式 recipe 都严格包含 `pretrain -> sft -> rl`，且全部 `backbone_train_mode=all`；
+- 唯一正式 Canary recipe 严格包含 `pretrain -> sft -> rl`，且全部 `backbone_train_mode=all`；
+- 配置、recipe、服务和数据 CLI 不提供未设计规模的入口，配置校验明确拒绝未知 dataset；
 - 当前数据契约往返保存结构化 frame、runtime identity、decoded controls、receipts 与 metadata；
 - speech-only 导入保持 action mask 全 false，显式专家动作可正确编码；
 - 环境客户端校验 identity，并保证 observation 不携带 reward/隐藏状态；
@@ -206,7 +209,7 @@ Canary 是完整训练链的小规模证明，不是删减版算法。它同样�
 - 后台 candidate 期间旧 policy 持续服务，stale 窗口隔离，有限性/KL/SFT 保真门禁拒绝时
   serving policy 不变；
 - resume 校验完整谱系和当前模型状态，并拒绝不完整 checkpoint；
-- Canary、Pilot、Production 通过同一 recipe 和 train 分派路径。
+- Canary 通过公共 recipe 和 train 分派路径，Smoke 只验证相同代码契约。
 
 除上述单项契约外，`configs/recipes/smoke.yaml` 必须通过公共
 `scripts/run-training.sh -> training run-recipe -> recipe.py::run_recipe ->

@@ -43,7 +43,7 @@ def _validate_voice(record: dict[str, Any], root: Path) -> dict[str, Any]:
     }
 
 
-def select_pilot_voices(
+def select_canary_voices(
     root: str | Path,
     *,
     library: str | Path | None = None,
@@ -78,7 +78,8 @@ def select_pilot_voices(
     else:
         if library is None:
             raise ValueError(
-                "production voice selection requires --library with CosyVoice example voice records"
+                "formal Canary voice selection requires --library with CosyVoice example "
+                "voice records"
             )
         raw = read_json(Path(library).expanduser())
         if not isinstance(raw, list):

@@ -1,13 +1,13 @@
 # Online RL：Online Recurrent PPO 与真实隔离电脑环境
 
 > 状态：最终目标 Online RL 阶段、Online Recurrent PPO 算法与环境协议
-> 日期：2026-08-20
+> 日期：2026-08-26
 > 关联文档：[统一三阶段训练架构](three-stage-training.md) · [统一电脑动作输出协议](unified-action.md) · [物理 Rollout 闭环](protocols/physical-rollout.md)
 
 ## 1. 环境选择
 
-Canary、Pilot、Production 全部使用同一种真实隔离电脑环境。正式 Online RL
-当前唯一允许的算法是 Online Recurrent PPO。它使用一个生命期
+Canary 是当前唯一正式规模，使用真实隔离电脑环境。正式 Online RL 当前唯一允许的算法是
+Online Recurrent PPO。它使用一个生命期
 session 的连续物理时间线；任务完成不会重置模型或环境。只有显式 session close、设备
 更换或故障恢复才建立新的 lineage。Canary 不使用 fixture 或离线 rollout 替代环境。
 
@@ -208,12 +208,13 @@ SFT checkpoint 必须逐键覆盖包含 Value Head 的当前完整模型；repla
 达到正式训练预算后显式 close lifetime session；因 `stop_after_updates` 暂停时只断开训练
 client，保留 Harness、环境与 codec session 供同一 checkpoint 恢复。
 
-## 8. 规模参数
+## 8. Canary 本机规模参数
 
-三种规模使用同一协议，默认 window 都是 750 units；Canary、Pilot、Production 只改变
-窗口数、更新预算和资源规格。当前正式语义是一个智能体、一个 active lifetime session、
-一条连续时间线。多环境并行代表多个智能体/生命期，不属于这套单智能体自学习契约，不能
-作为吞吐优化暗中引入。
+Canary 的 window 固定为 750 units，正式语义是一个智能体、一个 active lifetime session、
+一条连续时间线。本机验证记录窗口封存/丢弃数、candidate 接纳/拒绝、finalization lag、
+reward、吞吐和峰值显存。多环境并行代表多个智能体/生命期，不属于这套单智能体自学习契约，
+不能作为吞吐优化暗中引入。后续规模不得通过复制 RL 循环实现；必须基于 Canary 证据重新
+设计窗口数、更新预算和资源规格，并先刷新架构与测试契约。
 
 ## 9. 测试契约
 

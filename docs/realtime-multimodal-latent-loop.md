@@ -774,9 +774,9 @@ Pretrain、SFT 和 Online RL 分别使用 1.0、0.5 和两路 0.1 的 JEPA 系�
 
 ## 17. 训练约束
 
-1. Canary、Pilot、Production 使用同一个训练入口和状态协议。
+1. Canary 是唯一正式规模，使用公共训练入口和状态协议；后续规模另行设计。
 2. 所有训练 episode 按时间顺序处理，不能每个窗口重置状态。
-3. 生产 memory horizon 和 TBPTT 为 750 units。
+3. 正式 Canary 的 memory horizon 和 TBPTT 为 750 units。
 4. 所有 targets 配套 mask；缺失标签屏蔽对应 loss，不伪造 NOOP 或 SILENCE。
 5. 未来输出 loss 必须能够在 TBPTT 范围内回传到早期 WorldStateUpdate。
 6. 训练、验证、推理和恢复共享同一 forward_step 语义。
@@ -838,7 +838,7 @@ MiniCPM 或同类多模态主干可以提供视觉编码、音频编码、Percei
 - tbptt_units、memory_horizon_units、mixed precision；
 - loss weights、checkpoint cadence、manifest 和 run identity。
 
-生产、Canary、Pilot 的正式 horizon 为 750 units；Smoke 只缩小数值，不改变协议。
+Canary 的正式 horizon 为 750 units；Smoke 只缩小数值，不改变协议。
 
 ## 21. 评测与消融
 

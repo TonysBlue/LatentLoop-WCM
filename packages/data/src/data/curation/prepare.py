@@ -10,7 +10,7 @@ from runtime.codec_worker import CodecWorkerClient
 from runtime.config import ProjectConfig
 
 from data.codec_targets import encode_target_speech
-from data.curation.audit import audit_pilot_data
+from data.curation.audit import audit_canary_data
 from data.curation.common import (
     SPLITS,
     dataset_path,
@@ -21,11 +21,11 @@ from data.curation.common import (
     sha256_file,
     write_json,
 )
-from data.curation.fetch import fetch_pilot_data
-from data.curation.manifest import build_pilot_manifest, build_source_inventory
-from data.curation.synthesis import synthesize_pilot
-from data.curation.text import build_pilot_text
-from data.curation.voices import select_pilot_voices
+from data.curation.fetch import fetch_canary_data
+from data.curation.manifest import build_canary_manifest, build_source_inventory
+from data.curation.synthesis import synthesize_canary
+from data.curation.text import build_canary_text
+from data.curation.voices import select_canary_voices
 from data.speech_import import import_speech_manifest
 from data.webdataset import EpisodeShardReader, write_episode_shards
 
@@ -115,13 +115,13 @@ def check_mimi_decode(
     return {**report, "path": str(path)}
 
 
-def encode_pilot_shards(
+def encode_canary_shards(
     root: str | Path,
     *,
-    dataset: str,
     config: ProjectConfig,
     client: CodecWorkerClient,
 ) -> dict[str, Any]:
+    dataset = "canary"
     root = Path(root).expanduser().resolve()
     results: list[dict[str, Any]] = []
     for split in SPLITS:
@@ -164,7 +164,7 @@ def encode_pilot_shards(
     return report
 
 
-def prepare_pilot_data(
+def prepare_canary_data(
     root: str | Path,
     *,
     config: ProjectConfig,
@@ -181,50 +181,35 @@ def prepare_pilot_data(
     socket_path: str | Path | None = None,
     encode: bool = False,
     mimi_report_dir: str | Path | None = None,
-    dataset: str = "all",
 ) -> dict[str, Any]:
-    """Run all deterministic Pilot preparation stages in dependency order."""
+    """Run all deterministic Canary preparation stages in dependency order."""
     root = Path(root).expanduser().resolve()
     ensure_tree(root)
-    fetch = fetch_pilot_data(
+    fetch = fetch_canary_data(
         root, fixture=fixture, lock_path=lock_path, download=download, extract=extract
     )
     inventory = None
     if not fixture:
         if not normalize_command:
-            raise ValueError("production preparation requires --normalize-command")
+            raise ValueError("formal Canary preparation requires --normalize-command")
         inventory = build_source_inventory(normalize_command, root)
-    voices = select_pilot_voices(root, library=library, fixture=fixture)
-    if dataset not in {"canary", "pilot", "production", "all"}:
-        raise ValueError("dataset must be canary, pilot, production, or all")
+    voices = select_canary_voices(root, library=library, fixture=fixture)
     datasets: dict[str, Any] = {}
     client = codec_client(config, socket_path) if socket_path else None
     if encode and client is None:
         raise ValueError("--encode requires --socket")
-    # Production is an external source governed by its own locked manifest;
-    # it is never implicitly synthesized by the Canary/Pilot convenience path.
-    production_manifest = dataset_path(root, dataset, "manifests", "episodes.jsonl")
-    if dataset == "production" and not production_manifest.is_file():
-        raise FileNotFoundError(
-            "Production preparation requires an external locked source manifest; "
-            "provision the current source manifest before preparing production data"
-        )
-    dataset_names = ("canary", "pilot") if dataset == "all" else (dataset,)
+    dataset_names = ("canary",)
     for dataset_name in dataset_names:
-        text = build_pilot_text(
-            root, dataset=dataset_name, fixture=fixture, seed=config.data.seed
-        )
-        synthesis = synthesize_pilot(
+        text = build_canary_text(root, fixture=fixture, seed=config.data.seed)
+        synthesis = synthesize_canary(
             root,
-            dataset=dataset_name,
             fixture=fixture,
             synth_command=synth_command,
             asr_command=asr_command,
             model_sha256=model_sha256,
         )
-        manifest = build_pilot_manifest(
+        manifest = build_canary_manifest(
             root,
-            dataset=dataset_name,
             fixture=fixture,
             normalize_command=normalize_command,
             screen_command=screen_command,
@@ -251,9 +236,8 @@ def prepare_pilot_data(
             mimi = {"path": str(candidate), "provided": provided}
             mimi_path = str(candidate) if provided else None
         audit = (
-            audit_pilot_data(
+            audit_canary_data(
                 root,
-                dataset=dataset_name,
                 fixture=fixture,
                 mimi_report=mimi_path,
             )
@@ -261,7 +245,7 @@ def prepare_pilot_data(
             else None
         )
         encoded = (
-            encode_pilot_shards(root, dataset=dataset_name, config=config, client=client)
+            encode_canary_shards(root, config=config, client=client)
             if encode
             else None
         )

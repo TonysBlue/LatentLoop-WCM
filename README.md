@@ -95,9 +95,9 @@ scripts/wandb-local.sh down
 直接流式语音使用 80 ms 主时钟与 Mimi 24 kHz codec。实现和运行命令见
 [`docs/direct-speech.md`](docs/direct-speech.md)。
 
-Canary/Pilot 数据准备、外部语料许可证锁、CosyVoice/ASR/屏幕适配器以及自动审计门禁见
-[`docs/canary-pilot-data.md`](docs/canary-pilot-data.md)。本地 fixture 可以在不下载语料和模型的
-情况下跑通六个阶段：
+Canary 数据准备、外部语料许可证锁、CosyVoice/ASR/屏幕适配器以及自动审计门禁见
+[`docs/canary-data.md`](docs/canary-data.md)。本地 fixture 可以在不下载语料和模型的
+情况下跑通准备链：
 
 真实一小时 Canary 的固定数据下载、TTS/ASR、Mimi 编码、训练和 validation/test 评测
 使用统一入口，完整说明见 [`docs/canary-runbook.md`](docs/canary-runbook.md)：
@@ -108,10 +108,10 @@ scripts/run-training.sh --recipe configs/recipes/canary.yaml --run-id canary-001
 ```
 
 ```bash
-uv run data fetch-pilot-data --config configs/local-dev.yaml --fixture
-uv run data select-pilot-voices --config configs/local-dev.yaml --fixture
-uv run data build-pilot-text --config configs/local-dev.yaml --dataset canary --fixture
-uv run data synthesize-pilot --config configs/local-dev.yaml --dataset canary --fixture
-uv run data build-pilot-manifest --config configs/local-dev.yaml --dataset canary --fixture
-uv run data audit-pilot-data --config configs/local-dev.yaml --dataset canary --fixture
+uv run data fetch-canary-data --config configs/local-dev.yaml --fixture
+uv run data select-canary-voices --config configs/local-dev.yaml --fixture
+uv run data build-canary-text --config configs/local-dev.yaml --fixture
+uv run data synthesize-canary --config configs/local-dev.yaml --fixture
+uv run data build-canary-manifest --config configs/local-dev.yaml --fixture
+uv run data audit-canary-data --config configs/local-dev.yaml --fixture
 ```

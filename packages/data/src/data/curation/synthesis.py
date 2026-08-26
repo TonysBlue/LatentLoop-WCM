@@ -52,7 +52,7 @@ def _asr_score(
     if fixture:
         return metric, 0.0
     if not command:
-        raise ValueError("production synthesis requires --asr-command for CER/WER gating")
+        raise ValueError("formal Canary synthesis requires --asr-command for CER/WER gating")
     with tempfile.TemporaryDirectory() as temporary:
         result_path = Path(temporary) / "asr.json"
         _run_adapter(
@@ -69,11 +69,11 @@ def _asr_score(
     return metric, score
 
 
-def _production_audio_report(path: Path) -> dict[str, Any]:
+def _formal_audio_report(path: Path) -> dict[str, Any]:
     report_path = path.with_suffix(".metrics.json")
     if not report_path.is_file():
         raise ValueError(
-            "production TTS adapter must write a sibling .metrics.json with integrated_lufs"
+            "formal Canary TTS adapter must write a sibling .metrics.json with integrated_lufs"
         )
     report = read_json(report_path)
     loudness = float(report["integrated_lufs"])
@@ -150,15 +150,15 @@ def _store_synthesis_cache(
     )
 
 
-def synthesize_pilot(
+def synthesize_canary(
     root: str | Path,
     *,
-    dataset: str,
     fixture: bool = False,
     synth_command: str | None = None,
     asr_command: str | None = None,
     model_sha256: str | None = None,
 ) -> dict[str, Any]:
+    dataset = "canary"
     root = Path(root).expanduser().resolve()
     ensure_tree(root)
     plans_path = dataset_path(root, dataset, "text", "plans.json")
@@ -179,7 +179,7 @@ def synthesize_pilot(
     else:
         model_hash = require_sha256(model_sha256, "TTS model")
         if not synth_command:
-            raise ValueError("production synthesis requires --synth-command")
+            raise ValueError("formal Canary synthesis requires --synth-command")
     voices = {voice["voice_id"]: voice for voice in registry["voices"]}
     assistant_voice = str(registry["assistant_voice_id"])
     user_voices = {
@@ -273,7 +273,7 @@ def synthesize_pilot(
                 "fixture": fixture,
             }
             if not fixture:
-                receipt["normalization"] = _production_audio_report(output)
+                receipt["normalization"] = _formal_audio_report(output)
                 if not cached:
                     _store_synthesis_cache(
                         root,
@@ -366,7 +366,7 @@ def synthesize_pilot(
                 "fixture": fixture,
             }
             if not fixture:
-                receipt["normalization"] = _production_audio_report(output)
+                receipt["normalization"] = _formal_audio_report(output)
                 if not cached:
                     _store_synthesis_cache(
                         root,

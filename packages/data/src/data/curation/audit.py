@@ -71,7 +71,7 @@ def _validate_record(root: Path, record: dict[str, Any]) -> dict[str, Any]:
     if record["category"] not in CATEGORIES:
         raise ValueError(f"unknown category: {record['category']}")
     if record["language"] not in LANGUAGES or record["split"] not in SPLITS:
-        raise ValueError("language or split is outside the locked Pilot vocabulary")
+        raise ValueError("language or split is outside the locked Canary vocabulary")
     require_sha256(record["recipe_sha256"], "recipe")
     require_sha256(record["license_sha256"], "license")
     metrics: dict[str, Any] = {}
@@ -189,7 +189,7 @@ def _automatic_quality_report(
     return {
         "required": False,
         "mode": "automatic",
-        "generator": "latentloop-pilot-audit-v1",
+        "generator": "latentloop-canary-audit-v1",
         "items": len(records),
         "plan_items": plans,
         "source_items": source_items,
@@ -223,7 +223,7 @@ def _validate_text_plan(root: Path, dataset: str, fixture: bool) -> dict[str, An
     ]
     if stale:
         raise ValueError(f"automatic text quality gate failed: {stale[:3]}")
-    expected_count = 24 if fixture else (1_200 if dataset == "pilot" else 120)
+    expected_count = 24 if fixture else 120
     if len(plans) != expected_count:
         raise ValueError(f"{dataset} text plan has {len(plans)} plans, expected {expected_count}")
     language_counts = {
@@ -271,62 +271,31 @@ def _mimi_report(
     if weight_hash != MIMI_WEIGHT_SHA256:
         raise ValueError("Mimi decode-check used an unexpected weight identity")
     if report.get("codec_id") != MIMI_CODEC_ID or report.get("codec_revision") != MIMI_REVISION:
-        raise ValueError("Mimi decode-check codec identity does not match the Pilot config")
+        raise ValueError("Mimi decode-check codec identity does not match the Canary config")
     return report
 
 
-def _check_canary_exclusion(root: Path, records: list[dict[str, Any]]) -> None:
-    path = dataset_path(root, "canary", "manifests", "episodes.jsonl")
-    if not path.is_file():
-        raise ValueError("Pilot audit requires an audited Canary manifest")
-    audit_path = dataset_path(root, "canary", "reports", "audit.json")
-    if not audit_path.is_file():
-        raise ValueError("Pilot audit requires a Canary audit report")
-    audit = read_json(audit_path)
-    if not audit.get("passed") or audit.get("manifest_sha256") != sha256_file(path):
-        raise ValueError("Canary manifest is not covered by its audit report")
-    canary = read_jsonl(path)
-    canary_plans = {str(record.get("plan_id")) for record in canary if record.get("plan_id")}
-    pilot_plans = {str(record.get("plan_id")) for record in records if record.get("plan_id")}
-    canary_sources = {
-        str(item)
-        for record in canary
-        if record.get("category") in {"public_speech", "adjacent_turns"}
-        for item in record.get("source_utterance_ids", [])
-    }
-    pilot_sources = {
-        str(item)
-        for record in records
-        if record.get("category") in {"public_speech", "adjacent_turns"}
-        for item in record.get("source_utterance_ids", [])
-    }
-    if canary_plans & pilot_plans or canary_sources & pilot_sources:
-        raise ValueError("Pilot reuses a Canary plan or source utterance")
-
-
-def audit_pilot_data(
+def audit_canary_data(
     root: str | Path,
     *,
-    dataset: str,
     fixture: bool = False,
     mimi_report: str | Path | None = None,
 ) -> dict[str, Any]:
+    dataset = "canary"
     root = Path(root).expanduser().resolve()
     ensure_tree(root)
     manifest_path = dataset_path(root, dataset, "manifests", "episodes.jsonl")
     records = read_jsonl(manifest_path)
     if not records:
-        raise ValueError("Pilot manifest is empty")
+        raise ValueError("Canary manifest is empty")
     ids = [str(record["episode_id"]) for record in records]
     if len(ids) != len(set(ids)):
-        raise ValueError("Pilot manifest contains duplicate episode IDs")
+        raise ValueError("Canary manifest contains duplicate episode IDs")
     quality_rows = [_validate_record(root, record) for record in records]
     duration = {row["episode_id"]: row["duration_seconds"] for row in quality_rows}
     leaks = _leakage(records)
     if any(leaks.values()):
         raise ValueError(f"cross-split leakage detected: {leaks}")
-    if dataset == "pilot":
-        _check_canary_exclusion(root, records)
     aggregate: dict[str, dict[str, float]] = {
         "category": defaultdict(float),
         "language": defaultdict(float),
@@ -359,7 +328,7 @@ def audit_pilot_data(
                         "tolerance": 0.02,
                     }
                 )
-                if not fixture and dataset == "pilot" and error > 0.02:
+                if not fixture and error > 0.02:
                     raise ValueError(
                         f"quota gate failed for {category}/{language}/{split}: {error:.3%}"
                     )
@@ -389,8 +358,6 @@ def audit_pilot_data(
         raise ValueError("total dataset duration differs from its target by more than 0.5%")
     starts = sum(int(row["starts"]) for row in quality_rows)
     stops = sum(int(row["stops"]) for row in quality_rows)
-    if not fixture and dataset == "pilot" and (starts < 2_000 or stops < 2_000):
-        raise ValueError("Pilot requires at least 2,000 START and STOP labels")
     synthesis_path = dataset_path(root, dataset, "synthesized", "utterances.jsonl")
     synthesis = read_jsonl(synthesis_path)
     scores: dict[str, list[float]] = defaultdict(list)

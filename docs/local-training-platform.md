@@ -124,7 +124,7 @@ dataclass schema -> YAML profile -> CLI --set
 
 ### 4.3 统一代码路径
 
-Canary、Pilot、Production、Smoke 和 direct-speech gate 使用同一个 train/recipe/evaluate 代码路径。正式规模均按 `Pretrain -> SFT -> Online RL` 运行；Online RL 采用 Online Recurrent PPO。差异只来自配置中的数据量、更新数、PPO window、环境并发和资源预算，不得添加阶段专用 Python 或 shell 训练循环。`training.py::train` 直接按 `stage` 分派：Pretrain/SFT 使用共享监督分支，Online RL 使用 `training.rl.algorithm` 指定的在线环境分支。
+Canary、Smoke 和 direct-speech gate 使用同一个 train/recipe/evaluate 代码路径。Canary 是当前唯一正式规模，按 `Pretrain -> SFT -> Online RL` 运行；Online RL 采用 Online Recurrent PPO。Smoke 和 gate 只用于本机测试，不构成新的规模。`training.py::train` 直接按 `stage` 分派：Pretrain/SFT 使用共享监督分支，Online RL 使用 `training.rl.algorithm` 指定的在线环境分支。后续规模基于 Canary 实测结果另行设计，不预留复制的 Python、shell 或 YAML 路径。
 
 ## 5. 多模态时间契约
 
@@ -329,17 +329,17 @@ Smoke 只缩小 model_dim、layers、screen shape、KV horizon 和数据量，�
 recipe runner 顺序执行 Pretrain、SFT 与 Online Recurrent PPO。监督阶段使用显式 synthetic
 episode；RL 阶段只允许测试进程提供的 test-only Harness、codec 和 Reward Judge socket，
 并继续传输规范的 `ObservationSignal`/`ActuationSignal`。该配置用于验证训练分派、在线窗口、
-checkpoint 谱系和 evaluation/report 闭环，不得作为 Canary、Pilot 或 Production 的环境回退。
+checkpoint 谱系和 evaluation/report 闭环，不得作为 Canary 的环境回退。
 
 ### 8.2 Local
 
 Local profile 用于单 GPU 完整结构验证，包含音频/视觉 encoder、latent updater、750-unit 生产形状可配置的 KV、两个 output heads、checkpoint 和 W&B。
 
-### 8.3 Production-compatible
+### 8.3 Canary 正式契约
 
-Production-compatible profile 使用生产 codec、trajectory/action schema、60 秒 KV（750
-units）和 memory horizon 750。模型宽度、batch 和 optimizer 可以按硬件调整，但不得改变
-状态和数据协议。
+Canary profile 使用正式 codec、trajectory/action schema、60 秒 KV（750 units）和 memory
+horizon 750。短回归可以覆盖 update 数和 tracking mode，但不得改变状态和数据协议。模型宽度、
+数据规模或硬件预算的扩展必须等待本机 Canary 报告并单独更新设计。
 
 ## 9. 数据格式
 
@@ -391,7 +391,7 @@ episode 边界 reset；TBPTT 边界 detach。不能每个 unit reset 或把递�
 
 ### 10.2 优化配置
 
-optimizer、学习率、梯度累积、FP16、梯度裁剪和 checkpoint cadence 由配置定义。生产/Canary/Pilot 的 `tbptt_units` 和 `memory_horizon_units` 为 750；Smoke 可缩小但不能换代码路径。
+optimizer、学习率、梯度累积、FP16、梯度裁剪和 checkpoint cadence 由配置定义。Canary 的 `tbptt_units` 和 `memory_horizon_units` 为 750；Smoke 可缩小但不能换代码路径。
 
 ### 10.3 Loss 契约
 

@@ -28,5 +28,5 @@ NOOP executor、固定 reward 或 fixture
 fallback。每次 reset、崩溃和服务退出都回收 QEMU 进程、所有 socket、临时屏幕文件和 overlay，
 并报告 `environment_id/version/protocol/action_schema_id` 供 control server 比对。
 
-进程内 fake backend 只用于显式标记的契约/集成测试，正式 Canary、Pilot、Production 配置
+进程内 fake backend 只用于显式标记的契约/集成测试，正式 Canary 配置
 没有 fake fallback。

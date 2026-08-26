@@ -15,18 +15,17 @@ class _Result:
 
 
 def test_stage_configs_inherit_complete_profiles() -> None:
-    canary = load_config("configs/stages/canary-pretrain.yaml")
-    pilot = load_config("configs/stages/pilot-sft.yaml")
-    production = load_config("configs/stages/production-rl.yaml")
+    pretrain = load_config("configs/stages/canary-pretrain.yaml")
+    sft = load_config("configs/stages/canary-sft.yaml")
+    rl = load_config("configs/stages/canary-rl.yaml")
 
-    assert canary.data.dataset == "canary"
-    assert pilot.data.dataset == "pilot"
-    assert pilot.training.backbone_train_mode == "all"
-    assert pilot.training.stage == "sft"
-    assert production.training.rl.algorithm == "online_recurrent_ppo"
-    assert len(production.training.rl.rubric_sha256) == 64
-    assert production.data.dataset == "production"
-    assert production.model.model_dim == 896
+    assert all(config.data.dataset == "canary" for config in (pretrain, sft, rl))
+    assert [config.training.stage for config in (pretrain, sft, rl)] == [
+        "pretrain", "sft", "rl"
+    ]
+    assert all(config.training.backbone_train_mode == "all" for config in (pretrain, sft, rl))
+    assert rl.training.rl.algorithm == "online_recurrent_ppo"
+    assert len(rl.training.rl.rubric_sha256) == 64
 
 
 def test_smoke_recipe_uses_the_shared_three_stage_contract() -> None:
@@ -41,9 +40,8 @@ def test_smoke_recipe_uses_the_shared_three_stage_contract() -> None:
     assert configs[-1].training.rl.environment_id == "test-physical"
 
 
-@pytest.mark.parametrize("scale", ["canary", "pilot", "production"])
-def test_formal_recipes_have_the_same_three_stages(scale: str) -> None:
-    recipe = load_recipe(f"configs/recipes/{scale}.yaml")
+def test_canary_is_the_only_formal_three_stage_recipe() -> None:
+    recipe = load_recipe("configs/recipes/canary.yaml")
     assert [stage.name for stage in recipe.stages] == ["pretrain", "sft", "rl"]
     configs = [load_config(Path("configs/recipes") / stage.config) for stage in recipe.stages]
     assert [config.training.stage for config in configs] == ["pretrain", "sft", "rl"]
@@ -55,7 +53,7 @@ def test_formal_recipes_have_the_same_three_stages(scale: str) -> None:
 def test_recipe_requires_unique_stages(tmp_path: Path) -> None:
     recipe = tmp_path / "duplicate.yaml"
     recipe.write_text(
-        "name: bad\ndataset: pilot\nstages:\n"
+        "name: bad\ndataset: canary\nstages:\n"
         "  - {name: head, config: a.yaml}\n"
         "  - {name: head, config: b.yaml}\n",
         encoding="utf-8",

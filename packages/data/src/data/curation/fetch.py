@@ -40,7 +40,7 @@ def _is_tar_archive(path: Path) -> bool:
 def _download(url: str, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".partial")
-    request = urllib.request.Request(url, headers={"User-Agent": "LatentLoop-Pilot/0.1"})
+    request = urllib.request.Request(url, headers={"User-Agent": "LatentLoop-Canary/0.1"})
     with urllib.request.urlopen(request, timeout=60) as response, temporary.open("wb") as output:
         shutil.copyfileobj(response, output)
     temporary.replace(destination)
@@ -123,7 +123,7 @@ def _fixture(root: Path) -> dict[str, Any]:
     return report
 
 
-def fetch_pilot_data(
+def fetch_canary_data(
     root: str | Path,
     *,
     fixture: bool = False,
@@ -147,11 +147,12 @@ def fetch_pilot_data(
         }
         write_json(registry_path(root, "source-lock.template.json"), template)
         raise ValueError(
-            "production fetch requires --lock; a source-lock template was written under registry/"
+            "formal Canary fetch requires --lock; a source-lock template was written "
+            "under registry/"
         )
     lock = read_json(Path(lock_path).expanduser())
     if set(lock) != set(SOURCE_CATALOG):
-        raise ValueError("source lock must contain exactly the locked Pilot source catalog")
+        raise ValueError("source lock must contain exactly the locked Canary source catalog")
     results = []
     for source_id, expected in SOURCE_CATALOG.items():
         record = lock[source_id]

@@ -12,14 +12,14 @@ from runtime.config import load_config
 
 from data.codec_targets import encode_target_speech
 from data.curation import (
-    audit_pilot_data,
-    build_pilot_manifest,
-    build_pilot_text,
+    audit_canary_data,
+    build_canary_manifest,
+    build_canary_text,
     check_readiness,
-    fetch_pilot_data,
-    prepare_pilot_data,
-    select_pilot_voices,
-    synthesize_pilot,
+    fetch_canary_data,
+    prepare_canary_data,
+    select_canary_voices,
+    synthesize_canary,
 )
 from data.curation.prepare import codec_client
 from data.overfit import SpeechOverfitDataset
@@ -56,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
     readiness = subparsers.add_parser("check-readiness")
     readiness.add_argument("--config", required=True)
     readiness.add_argument("--root")
-    prepare = subparsers.add_parser("prepare-pilot-data")
+    prepare = subparsers.add_parser("prepare-canary-data")
     prepare.add_argument("--config", required=True)
     prepare.add_argument("--root")
     prepare.add_argument("--lock")
@@ -71,44 +71,35 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument("--socket")
     prepare.add_argument("--encode", action="store_true")
     prepare.add_argument("--mimi-report-dir")
-    prepare.add_argument(
-        "--dataset", choices=("canary", "pilot", "production", "all"), default="canary"
-    )
     prepare.add_argument("--fixture", action="store_true")
     for name in (
-        "fetch-pilot-data", "select-pilot-voices", "build-pilot-text",
-        "synthesize-pilot", "build-pilot-manifest", "audit-pilot-data",
+        "fetch-canary-data", "select-canary-voices", "build-canary-text",
+        "synthesize-canary", "build-canary-manifest", "audit-canary-data",
     ):
         command = subparsers.add_parser(name)
         command.add_argument("--config", required=True)
         command.add_argument("--root")
         command.add_argument("--fixture", action="store_true")
-    subparsers.choices["fetch-pilot-data"].add_argument("--lock")
-    subparsers.choices["fetch-pilot-data"].add_argument("--download", action="store_true")
-    subparsers.choices["fetch-pilot-data"].add_argument("--extract", action="store_true")
-    subparsers.choices["select-pilot-voices"].add_argument("--library")
-    for name in (
-        "build-pilot-text", "synthesize-pilot", "build-pilot-manifest", "audit-pilot-data"
-    ):
-        subparsers.choices[name].add_argument(
-            "--dataset", choices=("canary", "pilot"), required=True
-        )
-    subparsers.choices["build-pilot-text"].add_argument("--seed", type=int, default=17)
-    subparsers.choices["synthesize-pilot"].add_argument("--synth-command")
-    subparsers.choices["synthesize-pilot"].add_argument("--asr-command")
-    subparsers.choices["synthesize-pilot"].add_argument("--model-sha256")
-    subparsers.choices["build-pilot-manifest"].add_argument("--normalize-command")
-    subparsers.choices["build-pilot-manifest"].add_argument("--screen-command")
-    subparsers.choices["audit-pilot-data"].add_argument("--mimi-report")
+    subparsers.choices["fetch-canary-data"].add_argument("--lock")
+    subparsers.choices["fetch-canary-data"].add_argument("--download", action="store_true")
+    subparsers.choices["fetch-canary-data"].add_argument("--extract", action="store_true")
+    subparsers.choices["select-canary-voices"].add_argument("--library")
+    subparsers.choices["build-canary-text"].add_argument("--seed", type=int, default=17)
+    subparsers.choices["synthesize-canary"].add_argument("--synth-command")
+    subparsers.choices["synthesize-canary"].add_argument("--asr-command")
+    subparsers.choices["synthesize-canary"].add_argument("--model-sha256")
+    subparsers.choices["build-canary-manifest"].add_argument("--normalize-command")
+    subparsers.choices["build-canary-manifest"].add_argument("--screen-command")
+    subparsers.choices["audit-canary-data"].add_argument("--mimi-report")
     args = parser.parse_args(argv)
     if args.command == "check-readiness":
         config = load_config(args.config)
         root = args.root or config.runtime.data_root
         print(json.dumps(check_readiness(root, config=config), indent=2))
-    elif args.command == "prepare-pilot-data":
+    elif args.command == "prepare-canary-data":
         config = load_config(args.config)
         root = args.root or config.runtime.data_root
-        report = prepare_pilot_data(
+        report = prepare_canary_data(
             root,
             config=config,
             fixture=args.fixture,
@@ -124,41 +115,36 @@ def main(argv: list[str] | None = None) -> int:
             socket_path=args.socket,
             encode=args.encode,
             mimi_report_dir=args.mimi_report_dir,
-            dataset=args.dataset,
         )
         print(json.dumps(report, indent=2, default=str))
     elif args.command in {
-        "fetch-pilot-data", "select-pilot-voices", "build-pilot-text", "synthesize-pilot",
-        "build-pilot-manifest", "audit-pilot-data",
+        "fetch-canary-data", "select-canary-voices", "build-canary-text", "synthesize-canary",
+        "build-canary-manifest", "audit-canary-data",
     }:
         config = load_config(args.config)
         root = args.root or config.runtime.data_root
-        if args.command == "fetch-pilot-data":
-            report = fetch_pilot_data(
+        if args.command == "fetch-canary-data":
+            report = fetch_canary_data(
                 root, fixture=args.fixture, lock_path=args.lock,
                 download=args.download, extract=args.extract,
             )
-        elif args.command == "select-pilot-voices":
-            report = select_pilot_voices(root, library=args.library, fixture=args.fixture)
-        elif args.command == "build-pilot-text":
-            report = build_pilot_text(
-                root, dataset=args.dataset, fixture=args.fixture, seed=args.seed
-            )
-        elif args.command == "synthesize-pilot":
-            report = synthesize_pilot(
-                root, dataset=args.dataset, fixture=args.fixture,
+        elif args.command == "select-canary-voices":
+            report = select_canary_voices(root, library=args.library, fixture=args.fixture)
+        elif args.command == "build-canary-text":
+            report = build_canary_text(root, fixture=args.fixture, seed=args.seed)
+        elif args.command == "synthesize-canary":
+            report = synthesize_canary(
+                root, fixture=args.fixture,
                 synth_command=args.synth_command, asr_command=args.asr_command,
                 model_sha256=args.model_sha256,
             )
-        elif args.command == "build-pilot-manifest":
-            report = build_pilot_manifest(
-                root, dataset=args.dataset, fixture=args.fixture,
+        elif args.command == "build-canary-manifest":
+            report = build_canary_manifest(
+                root, fixture=args.fixture,
                 normalize_command=args.normalize_command, screen_command=args.screen_command,
             )
         else:
-            report = audit_pilot_data(
-                root, dataset=args.dataset, fixture=args.fixture, mimi_report=args.mimi_report
-            )
+            report = audit_canary_data(root, fixture=args.fixture, mimi_report=args.mimi_report)
         print(json.dumps(report, indent=2, default=str))
     else:
         config = load_config(args.config, args.overrides)

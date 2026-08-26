@@ -6,26 +6,26 @@ from pathlib import Path
 import pytest
 from data import import_speech_manifest
 from data.curation import (
-    audit_pilot_data,
-    build_pilot_manifest,
-    build_pilot_text,
-    fetch_pilot_data,
-    select_pilot_voices,
-    synthesize_pilot,
+    audit_canary_data,
+    build_canary_manifest,
+    build_canary_text,
+    fetch_canary_data,
+    select_canary_voices,
+    synthesize_canary,
 )
 from data.curation.common import dataset_path, read_jsonl, registry_path, sha256_file
 from data.curation.manifest import _duration_subset
-from data.curation.prepare import prepare_pilot_data
+from data.curation.prepare import prepare_canary_data
 from data.curation.readiness import check_readiness
 from model.types import SpeechMode
 from runtime.config import DataConfig, ModelConfig, ProjectConfig, load_config
 
 
-def _fixture_pipeline(root: Path, dataset: str) -> None:
-    build_pilot_text(root, dataset=dataset, fixture=True)
-    synthesize_pilot(root, dataset=dataset, fixture=True)
-    build_pilot_manifest(root, dataset=dataset, fixture=True)
-    audit_pilot_data(root, dataset=dataset, fixture=True)
+def _fixture_pipeline(root: Path) -> None:
+    build_canary_text(root, fixture=True)
+    synthesize_canary(root, fixture=True)
+    build_canary_manifest(root, fixture=True)
+    audit_canary_data(root, fixture=True)
 
 
 def test_duration_subset_finds_a_quota_fit_that_greedy_order_misses() -> None:
@@ -34,54 +34,44 @@ def test_duration_subset_finds_a_quota_fit_that_greedy_order_misses() -> None:
     assert sum(durations[index] for index in selected) == pytest.approx(10.4)
 
 
-def test_fixture_pipeline_is_resumable_and_isolates_canary(tmp_path: Path) -> None:
+def test_fixture_pipeline_is_resumable(tmp_path: Path) -> None:
     root = tmp_path / "datasets"
-    first = fetch_pilot_data(root, fixture=True)
-    select_pilot_voices(root, fixture=True)
-    _fixture_pipeline(root, "canary")
-    _fixture_pipeline(root, "pilot")
-
-    canary = read_jsonl(dataset_path(root, "canary", "manifests", "episodes.jsonl"))
-    pilot = read_jsonl(dataset_path(root, "pilot", "manifests", "episodes.jsonl"))
-    canary_sources = {source for record in canary for source in record["source_utterance_ids"]}
-    pilot_sources = {source for record in pilot for source in record["source_utterance_ids"]}
-    assert canary_sources.isdisjoint(pilot_sources)
-    assert {record["plan_id"] for record in canary if record.get("plan_id")}.isdisjoint(
-        {record["plan_id"] for record in pilot if record.get("plan_id")}
-    )
-    manifest = dataset_path(root, "pilot", "manifests", "episodes.jsonl")
+    first = fetch_canary_data(root, fixture=True)
+    select_canary_voices(root, fixture=True)
+    _fixture_pipeline(root)
+    manifest = dataset_path(root, "canary", "manifests", "episodes.jsonl")
     before = sha256_file(manifest)
 
-    second = fetch_pilot_data(root, fixture=True)
-    _fixture_pipeline(root, "pilot")
+    second = fetch_canary_data(root, fixture=True)
+    _fixture_pipeline(root)
 
     assert first["inventory_sha256"] == second["inventory_sha256"]
     assert sha256_file(manifest) == before
-    assert (dataset_path(root, "pilot", "reports") / "data-card.md").is_file()
-    assert (dataset_path(root, "pilot", "reports") / "license-report.json").is_file()
-    assert (dataset_path(root, "pilot", "reports") / "quota-report.json").is_file()
-    assert (dataset_path(root, "pilot", "reports") / "quality-report.json").is_file()
+    assert (dataset_path(root, "canary", "reports") / "data-card.md").is_file()
+    assert (dataset_path(root, "canary", "reports") / "license-report.json").is_file()
+    assert (dataset_path(root, "canary", "reports") / "quota-report.json").is_file()
+    assert (dataset_path(root, "canary", "reports") / "quality-report.json").is_file()
 
 
 def test_automatic_prepare_does_not_require_review_ledger(tmp_path: Path) -> None:
     root = tmp_path / "datasets"
-    result = prepare_pilot_data(root, config=ProjectConfig(), fixture=True)
+    result = prepare_canary_data(root, config=ProjectConfig(), fixture=True)
     assert result["datasets"]["canary"]["audit"]["passed"]
-    assert result["datasets"]["pilot"]["audit"]["passed"]
+    quality_path = dataset_path(root, "canary", "reports") / "quality-report.json"
     quality = json.loads(
-        (dataset_path(root, "pilot", "reports") / "quality-report.json").read_text(encoding="utf-8")
+        quality_path.read_text(encoding="utf-8")
     )
     assert quality["automatic_quality"]["mode"] == "automatic"
-    assert not (root / "reviews" / "pilot.jsonl").exists()
+    assert not (root / "reviews" / "canary.jsonl").exists()
 
 
-def test_pilot_manifest_import_has_segment_aware_training_masks(
+def test_canary_manifest_import_has_segment_aware_training_masks(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "datasets"
-    fetch_pilot_data(root, fixture=True)
-    select_pilot_voices(root, fixture=True)
-    _fixture_pipeline(root, "canary")
+    fetch_canary_data(root, fixture=True)
+    select_canary_voices(root, fixture=True)
+    _fixture_pipeline(root)
     records = read_jsonl(dataset_path(root, "canary", "manifests", "episodes.jsonl"))
     public_record = next(record for record in records if record["category"] == "public_speech")
     dialogue_record = next(
@@ -107,11 +97,11 @@ def test_pilot_manifest_import_has_segment_aware_training_masks(
 
 def test_manifest_interleaves_supervision_categories_deterministically(tmp_path: Path) -> None:
     root = tmp_path / "datasets"
-    fetch_pilot_data(root, fixture=True)
-    select_pilot_voices(root, fixture=True)
-    build_pilot_text(root, dataset="canary", fixture=True)
-    synthesize_pilot(root, dataset="canary", fixture=True)
-    build_pilot_manifest(root, dataset="canary", fixture=True)
+    fetch_canary_data(root, fixture=True)
+    select_canary_voices(root, fixture=True)
+    build_canary_text(root, fixture=True)
+    synthesize_canary(root, fixture=True)
+    build_canary_manifest(root, fixture=True)
 
     train_path = dataset_path(root, "canary", "manifests", "train.jsonl")
     first = read_jsonl(train_path)
@@ -122,16 +112,16 @@ def test_manifest_interleaves_supervision_categories_deterministically(tmp_path:
     assert any(record.get("target_segments") for record in first[:8])
     counts = {category: categories.count(category) for category in set(categories)}
 
-    build_pilot_manifest(root, dataset="canary", fixture=True)
+    build_canary_manifest(root, fixture=True)
     second = read_jsonl(train_path)
     assert sha256_file(train_path) == first_hash
     second_categories = [str(record["category"]) for record in second]
     assert {category: second_categories.count(category) for category in counts} == counts
 
 
-def test_production_fetch_requires_locked_source_lock(tmp_path: Path) -> None:
+def test_formal_fetch_requires_locked_source_lock(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="requires --lock"):
-        fetch_pilot_data(tmp_path / "datasets")
+        fetch_canary_data(tmp_path / "datasets")
     assert registry_path(tmp_path / "datasets", "source-lock.template.json").is_file()
 
 
@@ -149,25 +139,15 @@ def test_readiness_reports_a_missing_data_root_cleanly(tmp_path: Path) -> None:
         check_readiness(missing, config=config)
 
 
-def test_production_text_plan_meets_scale_and_duration_mix(tmp_path: Path) -> None:
+def test_canary_text_plan_meets_scale_and_duration_mix(tmp_path: Path) -> None:
     root = tmp_path / "datasets"
-    report = build_pilot_text(root, dataset="pilot")
+    report = build_canary_text(root)
     plans = json.loads(Path(report["path"]).read_text(encoding="utf-8"))["plans"]
 
-    assert len(plans) == 1_200
-    assert report["assistant_responses"] >= 2_000
-    assert sum(plan["language"] == "zh" for plan in plans) == 960
-    assert sum(plan["language"] == "en" for plan in plans) == 240
-    assert sum(plan["duration_class"] == "short" for plan in plans) == 720
-    assert sum(plan["duration_class"] == "medium" for plan in plans) == 300
-    assert sum(plan["duration_class"] == "long" for plan in plans) == 180
-    assert sum(len(plan["turns"]) > 2 for plan in plans) == 480
-    assert sum(
-        plan["target_duration_seconds"]
-        for plan in plans
-        if plan["category"] == "synthetic_dialogue"
-    ) == pytest.approx(18_000, abs=0.001)
-    assert sum(
-        plan["target_duration_seconds"] for plan in plans if plan["category"] == "screen_task"
-    ) == pytest.approx(1_800, abs=0.001)
+    assert len(plans) == 120
+    assert sum(plan["language"] == "zh" for plan in plans) == 96
+    assert sum(plan["language"] == "en" for plan in plans) == 24
+    assert sum(plan["duration_class"] == "short" for plan in plans) == 72
+    assert sum(plan["duration_class"] == "medium" for plan in plans) == 30
+    assert sum(plan["duration_class"] == "long" for plan in plans) == 18
     assert report["quality_status"] == "generated"

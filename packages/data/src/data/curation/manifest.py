@@ -122,7 +122,7 @@ def _load_assets(
     voices_path = registry_path(root, "voices", "registry.json")
     for path in (source_path, plans_path, synthesis_path, voices_path):
         if not path.is_file():
-            raise FileNotFoundError(f"required Pilot asset is absent: {path}")
+            raise FileNotFoundError(f"required Canary asset is absent: {path}")
     source_items = read_jsonl(source_path)
     for item in source_items:
         audio = Path(item["audio"])
@@ -154,30 +154,6 @@ def _load_assets(
     if registry_hash != expected_registry:
         raise ValueError("voice registry hash is stale")
     return source_items, read_json(plans_path), receipts, registry
-
-
-def _excluded(root: Path, dataset: str, fixture: bool) -> tuple[set[str], set[str]]:
-    if dataset == "canary":
-        return set(), set()
-    path = dataset_path(root, "canary", "manifests", "episodes.jsonl")
-    if not path.is_file():
-        raise ValueError("build and audit Canary before constructing the Pilot dataset")
-    audit_path = dataset_path(root, "canary", "reports", "audit.json")
-    if not audit_path.is_file():
-        raise ValueError("audit Canary before constructing the Pilot dataset")
-    audit = read_json(audit_path)
-    if not audit.get("passed") or bool(audit.get("fixture")) != fixture:
-        raise ValueError("Canary audit mode does not match the requested Pilot build")
-    if audit.get("manifest_sha256") != sha256_file(path):
-        raise ValueError("Canary manifest changed after its audit")
-    plan_ids: set[str] = set()
-    source_ids: set[str] = set()
-    for record in read_jsonl(path):
-        if record.get("plan_id"):
-            plan_ids.add(str(record["plan_id"]))
-        if record.get("category") in {"public_speech", "adjacent_turns"}:
-            source_ids.update(map(str, record.get("source_utterance_ids", [])))
-    return plan_ids, source_ids
 
 
 def _cached_episode(path: Path, recipe_hash: str) -> dict[str, Any] | None:
@@ -480,7 +456,7 @@ def _compose_plan(
         "target_speech": str(target_path.resolve()),
         "target_speech_sha256": sha256_file(target_path),
         "source": "generated-computer-dialogue",
-        "source_version": "pilot-plan-v1",
+        "source_version": "canary-plan-v1",
         "source_url": "internal://datasets/text-plans",
         "source_utterance_ids": [plan["plan_id"]],
         "source_license": source_license,
@@ -743,7 +719,7 @@ def _interleave_categories(records: list[dict[str, Any]]) -> list[dict[str, Any]
         else:
             unknown.append(record)
 
-    # Keep an explicit order for the known production categories.  Unknown
+    # Keep an explicit order for the known formal categories.  Unknown
     # categories are retained after the round-robin sequence rather than being
     # silently dropped from a manifest.
     ordered_categories = [category for category in _TRAINING_CATEGORY_ORDER if grouped[category]]
@@ -763,14 +739,14 @@ def _interleave_categories(records: list[dict[str, Any]]) -> list[dict[str, Any]
     return ordered
 
 
-def build_pilot_manifest(
+def build_canary_manifest(
     root: str | Path,
     *,
-    dataset: str,
     fixture: bool = False,
     normalize_command: str | None = None,
     screen_command: str | None = None,
 ) -> dict[str, Any]:
+    dataset = "canary"
     root = Path(root).expanduser().resolve()
     ensure_tree(root)
     if normalize_command:
@@ -780,22 +756,19 @@ def build_pilot_manifest(
         receipt = registry_path(root, "normalized", "source-items.receipt.json")
         if not inventory.is_file() or not receipt.is_file():
             raise ValueError(
-                "production manifest construction requires --normalize-command on first run"
+                "formal Canary manifest construction requires --normalize-command on first run"
             )
     source_items, plans, receipts, registry = _load_assets(root, dataset)
-    excluded_plans, excluded_sources = _excluded(root, dataset, fixture)
     records = _select_sources(
         root,
         dataset,
         source_items,
         receipts,
         registry,
-        excluded_sources,
+        set(),
         fixture,
     )
     for plan in plans["plans"]:
-        if plan["plan_id"] in excluded_plans:
-            continue
         records.append(
             _compose_plan(root, dataset, plan, receipts, registry, fixture, screen_command)
         )
@@ -830,8 +803,6 @@ def build_pilot_manifest(
         "episodes": len(records),
         "manifest": str(manifest_path),
         "manifest_sha256": sha256_file(manifest_path),
-        "canary_excluded_plan_ids": len(excluded_plans),
-        "canary_excluded_source_ids": len(excluded_sources),
         "quotas": [
             {
                 "category": category,

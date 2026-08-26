@@ -1,9 +1,0 @@
-defaults:
-  - ../pilot
-  - _self_
-training:
-  stage: pretrain
-  max_updates: 50000
-  backbone_train_mode: all
-runtime:
-  run_name: pilot-pretrain

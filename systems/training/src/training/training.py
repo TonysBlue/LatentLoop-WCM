@@ -265,7 +265,7 @@ def train(
 ) -> dict[str, Any]:
     if resume and init_from:
         raise ValueError("resume and init_from are mutually exclusive")
-    if config.data.dataset in {"canary", "pilot", "production"} and not torch.cuda.is_available():
+    if config.data.dataset == "canary" and not torch.cuda.is_available():
         raise RuntimeError(
             "formal real-data training requires a CUDA GPU; "
             "torch.cuda.is_available() is false"
@@ -1259,7 +1259,7 @@ def train_online_ppo(
 ) -> dict[str, Any]:
     if not resume and not init_from:
         raise ValueError("Online Recurrent PPO requires the final SFT checkpoint as --init-from")
-    if config.data.dataset in {"canary", "pilot", "production"} and not torch.cuda.is_available():
+    if config.data.dataset == "canary" and not torch.cuda.is_available():
         raise RuntimeError(
             "formal Online Recurrent PPO requires a CUDA GPU; "
             "torch.cuda.is_available() is false"

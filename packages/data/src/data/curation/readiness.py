@@ -41,7 +41,7 @@ def check_readiness(
 ) -> dict[str, Any]:
     """Fail-closed machine check before any real-data training run."""
     dataset = dataset or config.data.dataset
-    if dataset not in {"canary", "pilot", "production", "direct-speech-overfit"}:
+    if dataset not in {"canary", "direct-speech-overfit"}:
         raise ValueError(f"readiness is not required for dataset={dataset!r}")
     root = Path(root).expanduser().resolve()
     if not root.is_dir():
@@ -53,9 +53,9 @@ def check_readiness(
     )
     missing: list[str] = []
     invalid: list[str] = []
-    production_dataset = dataset in {"canary", "pilot", "production"}
+    formal_dataset = dataset == "canary"
 
-    if production_dataset and config.training.stage == "rl":
+    if formal_dataset and config.training.stage == "rl":
         guard_assets = (
             ("SFT replay manifest", config.training.rl.sft_replay_manifest, False),
             ("SFT replay shards", config.training.rl.sft_replay_shards, True),
@@ -83,7 +83,7 @@ def check_readiness(
         return dataset_root.joinpath(*parts)
 
     audit_path = path("reports", "audit.json")
-    if production_dataset:
+    if formal_dataset:
         _required(audit_path, "audit report", missing)
         if audit_path.is_file() and not read_json(audit_path).get("passed"):
             invalid.append(f"audit report is not passed: {audit_path}")
@@ -168,7 +168,7 @@ def check_readiness(
                 if any(not entry.get("speech_codes_encoded") for entry in encoded_entries):
                     invalid.append(f"{split} processed manifest contains unencoded speech")
     mimi_reports = {}
-    if production_dataset:
+    if formal_dataset:
         report = path("reports", "mimi-decode.json")
         _required(report, f"{dataset} Mimi decode report", missing)
         if report.is_file():
@@ -200,11 +200,13 @@ def check_readiness(
                 payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
                 metadata = payload.get("metadata", {})
                 if metadata.get("codec_id") != config.data.codec_id:
-                    invalid.append("initial checkpoint codec_id differs from Pilot config")
+                    invalid.append("initial checkpoint codec_id differs from Canary config")
                 if metadata.get("codec_revision") != config.data.codec_revision:
-                    invalid.append("initial checkpoint codec_revision differs from Pilot config")
+                    invalid.append("initial checkpoint codec_revision differs from Canary config")
                 if metadata.get("codec_weight_hash") != config.data.codec_weight_hash:
-                    invalid.append("initial checkpoint codec weight hash differs from Pilot config")
+                    invalid.append(
+                        "initial checkpoint codec weight hash differs from Canary config"
+                    )
                 state = payload.get("model", {})
                 if not isinstance(state, dict) or not state:
                     invalid.append("initial checkpoint has no model state")

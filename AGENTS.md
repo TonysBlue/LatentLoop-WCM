@@ -31,9 +31,9 @@ changes over convenience abstractions.
 
 ## Core Principle: Same Code Path
 
-Canary, Pilot, and Production must use the same training implementation.
-Differences belong in YAML configuration, recipe composition, data scale, and
-initial checkpoints, not in copied Python or shell training loops.
+Canary is the only formal training scale while local validation is in progress.
+Future scale design must follow from Canary evidence and update the architecture,
+test contract, configuration, and asset plan before adding another formal profile.
 
 - All optimizer training goes through the Training System's shared `train` dispatcher.
 - Multi-stage execution goes through the Training System's shared recipe runner.
@@ -42,8 +42,7 @@ initial checkpoints, not in copied Python or shell training loops.
   `evaluate_checkpoint` implementation.
 - Data preparation goes through `data`/`scripts/data/prepare.sh` and the shared
   curation modules.
-- Do not add `run-canary.sh`, `train-pilot.py`, `production_training.py`, or
-  another stage-specific code path.
+- Do not add a stage- or scale-specific training loop.
 - E1/E2 and similar milestone labels are process terminology only. Do not put
   them in source filenames, package names, configuration keys, artifact
   directories, or CLI commands. They may appear in a design document's plan.
@@ -52,11 +51,11 @@ When a stage needs new behavior, first add a configuration field or a shared
 capability with tests. Only add stage-specific branching when the data/model
 contract genuinely differs, and document why in the design documentation.
 
-正式训练 recipe 的阶段语义固定为 `Pretrain -> SFT -> Online RL`。Canary、
-Pilot、Production 必须完整执行这三个阶段，且共享模型、训练循环、真实隔离电脑
-环境协议、reward 定义和 checkpoint 谱系；Online RL 的当前正式算法固定为
-Online Recurrent PPO。三种规模只能通过 YAML 改变数据量、optimizer update 数、
-PPO window 和资源预算。正式单智能体 Online RL 始终只有一个 active
+正式训练 recipe 的阶段语义固定为 `Pretrain -> SFT -> Online RL`。当前只保留
+Canary 正式规模，并完整执行这三个阶段，共享模型、训练循环、真实隔离电脑环境协议、
+reward 定义和 checkpoint 谱系；Online RL 的当前正式算法固定为 Online Recurrent PPO。
+后续规模必须等本机 Canary 验证形成数据、显存、吞吐和质量证据后重新设计，不预留未验证
+的规模配置或资产入口。正式单智能体 Online RL 始终只有一个 active
 lifetime session，不以环境并发分叉时间线。不得用 fixture、
 离线 rollout、critic/value head 或只训练输出 head 来替代任何正式阶段。测试可以
 使用显式标记的进程内环境实现协议契约，但该实现不得成为正式配置的回退路径。
@@ -140,7 +139,7 @@ Do not silently change these invariants:
 - Stream clock: one unit is 80 ms, 24 kHz audio, and exactly one Mimi frame.
 - Codec identity: `mimi-24khz-8x2048`, eight codebooks, vocabulary 2048,
   with the configured revision and weight SHA-256.
-- Context: the production profile retains 60 seconds (`750` units) of bounded
+- Context: the formal Canary profile retains 60 seconds (`750` units) of bounded
   per-layer KV state. KV is bounded and oldest context is evicted according to
   the model implementation; do not introduce unbounded cache growth.
 - State: recurrent KV, latent slots, audio cache, and speech-local state are
@@ -167,18 +166,16 @@ definitions:
 - `configs/smoke.yaml`: fast synthetic development and tests.
 - `configs/local-dev.yaml`: local synthetic GPU profile.
 - `configs/canary.yaml`: real Canary profile.
-- `configs/pilot.yaml`: Pilot profile.
-- `configs/production.yaml`: formal production model/data contract.
 - `configs/direct-speech-overfit.yaml`: deterministic speech gate.
 - `configs/stages/*.yaml`: complete stage configurations inherited from a
   profile.
 - `configs/recipes/*.yaml`: ordered stage composition and evaluation policy.
 
-Canary, Pilot, and Production recipes must keep validation after each stage
+The Canary recipe must keep validation after each stage
 and test after the final stage unless a documented experiment explicitly says
 otherwise. Use fixed `max_updates` for reproducible runs. Configuration
 overrides are for experiments and short regressions, not for hiding a changed
-production contract.
+formal contract.
 
 ## Data and External Assets
 
@@ -193,10 +190,9 @@ scripts/prepare-data.sh canary all
 uv run data check-readiness --config configs/canary.yaml
 ```
 
-Real Canary/Pilot assets must have locked source versions, licenses, archive
-hashes, manifests, audit reports, encoded shards, and Mimi reports. Production
-data is an external production asset; never fabricate it or silently fall
-back to a fixture. Fixture data is allowed only for explicit local tests and
+Real Canary assets must have locked source versions, licenses, archive hashes,
+manifests, audit reports, encoded shards, and Mimi reports. Never fabricate a
+formal asset or silently fall back to a fixture. Fixture data is allowed only for explicit local tests and
 must remain visibly marked as fixture.
 
 Readiness must verify the configured train manifest and shards belong to the
@@ -227,7 +223,7 @@ changed config, model shape, data manifest, codec revision, or codec weight
 must use a new run ID. The recipe runner rejects incompatible checkpoints;
 never work around this by deleting metadata or manually loading weights.
 
-Formal Canary, Pilot and Production Pretrain/SFT/RL stages always use
+Formal Canary Pretrain/SFT/RL stages always use
 `backbone_train_mode=all`. SFT receives the preceding Pretrain checkpoint and
 RL receives the final SFT checkpoint as both its initial policy and frozen
 reference. Frozen/selective modes remain available only for explicitly named
