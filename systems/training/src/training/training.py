@@ -287,7 +287,6 @@ def _checkpoint_metadata(
         codec_weight_hash=config.data.codec_weight_hash,
         git_commit=_git_commit(),
         codec_revision=config.data.codec_revision,
-        architecture_id=config.model.architecture_id,
         parent_sha256=parent_sha256,
         reference_checkpoint_sha256=reference_checkpoint_sha256,
         stage=config.training.stage,
@@ -388,7 +387,7 @@ def train(
     )
     model = model or StreamingLatentLoop(config.model)
     if init_from:
-        initialize_compatible_weights(model, init_from)
+        initialize_exact_weights(model, init_from)
     configure_trainable_parameters(model, config)
     head_parameters = []
     backbone_parameters = []
@@ -795,39 +794,13 @@ def train(
     }
 
 
-def initialize_compatible_weights(model: StreamingLatentLoop, path: str | Path) -> list[str]:
-    payload = torch.load(Path(path), map_location="cpu", weights_only=False)
-    if not isinstance(payload.get("model"), dict) or not isinstance(
-        payload.get("metadata"), dict
-    ):
-        raise ValueError("initial checkpoint is incomplete")
-    metadata = payload.get("metadata", {})
-    if metadata.get("architecture_id") != model.config.architecture_id:
-        raise ValueError("initial checkpoint architecture is incompatible")
-    if metadata.get("action_schema_id") != ACTION_SCHEMA_ID:
-        raise ValueError("initial checkpoint action schema is incompatible")
-    source = payload.get("model")
-    if not isinstance(source, dict):
-        raise ValueError("initial checkpoint does not contain a model state")
-    current = model.state_dict()
-    compatible = {
-        name: value
-        for name, value in source.items()
-        if name in current and current[name].shape == value.shape
-    }
-    if not compatible:
-        raise ValueError("initial checkpoint has no compatible model weights")
-    model.load_state_dict(compatible, strict=False)
-    return sorted(compatible)
-
-
 def initialize_exact_weights(model: StreamingLatentLoop, path: str | Path) -> None:
     payload = torch.load(Path(path), map_location="cpu", weights_only=False)
     metadata = payload.get("metadata")
     if not isinstance(metadata, dict):
         raise ValueError("initial checkpoint metadata is incomplete")
-    if metadata.get("architecture_id") != model.config.architecture_id:
-        raise ValueError("initial checkpoint architecture is incompatible")
+    if metadata.get("action_schema_id") != ACTION_SCHEMA_ID:
+        raise ValueError("initial checkpoint action schema is incompatible")
     source = payload.get("model")
     if not isinstance(source, dict):
         raise ValueError("initial checkpoint does not contain a model state")

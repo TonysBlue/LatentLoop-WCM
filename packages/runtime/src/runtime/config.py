@@ -10,7 +10,6 @@ from omegaconf import OmegaConf
 
 @dataclass(slots=True)
 class ModelConfig:
-    architecture_id: str = "latentloop-perceiver-jepa-memory-v3"
     model_dim: int = 256
     num_layers: int = 4
     num_heads: int = 8
@@ -190,8 +189,6 @@ class ProjectConfig:
         expected_kv_units = -(-self.model.kv_window_ms // self.data.unit_ms)
         if self.model.kv_units != expected_kv_units:
             raise ValueError("KV must exactly cover kv_window_ms at the configured unit_ms")
-        if self.model.architecture_id != "latentloop-perceiver-jepa-memory-v3":
-            raise ValueError("model.architecture_id must be latentloop-perceiver-jepa-memory-v3")
         if self.model.vision_tokens != 16:
             raise ValueError("vision_tokens must be 16")
         if (

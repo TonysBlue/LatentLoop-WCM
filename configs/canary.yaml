@@ -1,7 +1,6 @@
 # Canary uses the complete Pretrain -> SFT -> Online RL recipe on a small real
 # dataset. Online RL uses Online Recurrent PPO; all three formal stages train the full model.
 model:
-  architecture_id: latentloop-perceiver-jepa-memory-v3
   model_dim: 512
   num_layers: 8
   num_heads: 8

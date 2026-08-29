@@ -14,7 +14,7 @@ from training.checkpoint import (
     DataCursor,
     file_sha256,
 )
-from training.training import initialize_compatible_weights, initialize_exact_weights
+from training.training import initialize_exact_weights
 
 
 def test_checkpoint_restores_full_recurrent_step(
@@ -256,7 +256,7 @@ def test_checkpoint_rejects_removed_objective_metadata(
         )
 
 
-def test_ppo_exact_initialization_rejects_missing_value_head(
+def test_exact_initialization_rejects_missing_value_head(
     tmp_path: Path, smoke_config: ProjectConfig
 ) -> None:
     model = StreamingLatentLoop(smoke_config.model)
@@ -280,34 +280,6 @@ def test_ppo_exact_initialization_rejects_missing_value_head(
 
     with pytest.raises(ValueError, match="complete current model"):
         initialize_exact_weights(StreamingLatentLoop(smoke_config.model), incomplete)
-
-
-def test_weight_initialization_rejects_obsolete_architecture(
-    tmp_path: Path, smoke_config: ProjectConfig
-) -> None:
-    model = StreamingLatentLoop(smoke_config.model)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
-    path, _ = CheckpointManager(tmp_path).save(
-        "obsolete-architecture",
-        model=model,
-        optimizer=optimizer,
-        scheduler=None,
-        scaler=None,
-        recurrent_state=None,
-        train_state={},
-        data_cursor=DataCursor(),
-        metadata=CheckpointMetadata("data", "codec", "hash", "test", stage="sft"),
-        config=smoke_config.as_dict(),
-    )
-    payload = torch.load(path, map_location="cpu", weights_only=False)
-    payload["metadata"]["architecture_id"] = "latentloop-legacy-v0"
-    obsolete = tmp_path / "obsolete.pt"
-    torch.save(payload, obsolete)
-
-    with pytest.raises(ValueError, match="architecture is incompatible"):
-        initialize_compatible_weights(model, obsolete)
-    with pytest.raises(ValueError, match="architecture is incompatible"):
-        initialize_exact_weights(model, obsolete)
 
 
 def test_checkpoint_manifest_rejects_obsolete_format_field(

@@ -131,7 +131,6 @@ environment_id
 environment_version
 protocol_version
 action_schema_id = structured-action-v1
-architecture_id = latentloop-perceiver-jepa-memory-v3
 runtime_identity
 decoded_controls
 receipts
@@ -154,7 +153,6 @@ algorithm
 data_identity
 codec identity
 action_schema_id
-architecture_id
 parent_sha256
 reference_checkpoint_sha256
 environment_id
@@ -172,7 +170,9 @@ Pretrain checkpoint 的 parent 可以为空；SFT 的 parent 必须是 Pretrain�
 必须沿训练更新链前进，同时 reference hash 始终指向冻结的 SFT checkpoint。旧 flat-action
 checkpoint 以及旧 InputEncoder/KV/head 布局 checkpoint 直接拒绝，不能 resume 或
 warm-start 任意权重。
-Pretrain/SFT checkpoint 的 `algorithm=null`；Online RL checkpoint 的
+项目只支持当前代码定义的唯一架构，不设置架构名称或历史版本号。完整恢复由 resolved
+config hash、严格 state-dict 键与形状、codec/action/data identity 共同校验；不兼容资产直接
+拒绝。Pretrain/SFT checkpoint 的 `algorithm=null`；Online RL checkpoint 的
 `algorithm=online_recurrent_ppo`。checkpoint 不保存 `objective` 字段。
 
 ## 8. Canary 本机验证规模

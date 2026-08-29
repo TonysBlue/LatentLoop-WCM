@@ -31,7 +31,6 @@ class CheckpointMetadata:
     codec_weight_hash: str
     git_commit: str
     codec_revision: str = "unknown"
-    architecture_id: str = "latentloop-perceiver-jepa-memory-v3"
     parent_sha256: str | None = None
     stage: str = "pretrain"
     algorithm: str | None = None
@@ -140,8 +139,6 @@ def _parse_metadata(payload: Any) -> CheckpointMetadata:
         )
     if "algorithm" not in payload:
         raise ValueError("checkpoint algorithm identity is missing")
-    if payload.get("architecture_id") != "latentloop-perceiver-jepa-memory-v3":
-        raise ValueError("checkpoint architecture identity is missing or obsolete")
     return CheckpointMetadata(**payload)
 
 
@@ -284,7 +281,6 @@ class CheckpointManager:
             "codec_id",
             "codec_weight_hash",
             "codec_revision",
-            "architecture_id",
             "stage",
             "algorithm",
             "action_schema_id",

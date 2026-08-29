@@ -1,5 +1,4 @@
 model:
-  architecture_id: latentloop-perceiver-jepa-memory-v3
   model_dim: 512
   num_layers: 8
   num_heads: 8
