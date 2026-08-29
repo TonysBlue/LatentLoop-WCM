@@ -13,7 +13,7 @@
 当前正式模型使用 Backbone 内的共享语义 memory slots `C_t`，替代外部
 `WorldStateUpdate/Z_t`。`H_t` 是当前工作状态，`C_t` 是跨 unit 保存的语义状态；
 `C_t` 不直接连接 Speech/Action/Value/JEPA heads，只通过下一 unit 的 Backbone
-影响 `H_t`。每层 RecentKV 保留最近 750 units 的精确历史，过期 KV 经过 surprise
+影响 `H_t`。每层 RecentKV 保留最近 375 units 的精确历史，过期 KV 经过 surprise
 gate 和 Delta/KDA 更新写入固定容量 SlowMemory。
 
 ```text
@@ -41,7 +41,7 @@ $$
 $$
 
 `RecentKV` 是短期精确上下文；`SlowMemory` 是每层固定容量的长期关联摘要；`C_t`
-是共享语义/认知状态。SlowMemory 不是完整 softmax attention 的严格等价替代，750
+是共享语义/认知状态。SlowMemory 不是完整 softmax attention 的严格等价替代，375
 unit 窗口内仍保持 RecentKV 精确语义。
 
 ### 1.1 系统边界
@@ -190,7 +190,7 @@ parameters = kind-conditioned coordinate/button/scroll/text/key fields
 ### 4.1 KV Cache
 
 每层 KV 保存最近进入主干的 16 个 Perceiver slots。缓存按完整 unit 追加和淘汰，
-不能在 unit 中间截断。生产上限为 750 个 80 ms unit，即每层 12,000 tokens、60 秒。
+不能在 unit 中间截断。Canary 上限为 375 个 80 ms unit，即每层 6,000 tokens、30 秒。
 语义 memory slots 不作为额外 token 直接写入 KV。超过精确窗口的完整 unit KV 才写入
 SlowMemory。
 
@@ -610,7 +610,7 @@ $$
 = \mathrm{CURRENT\_SLOTS}[t-\mathrm{kv\_units}+1:t]
 $$
 
-生产上下文为 750 units（60 秒），每个 unit 固定 16 个 slots。KV 按完整 unit 淘汰，
+Canary 上下文为 375 units（30 秒），每个 unit 固定 16 个 slots。KV 按完整 unit 淘汰，
 保留后的 token 仍按原始时间顺序参与 causal attention。
 
 ### 12.2 语义 memory 和 SlowMemory 读取
@@ -812,10 +812,10 @@ Pretrain、SFT 和 Online RL 分别使用 1.0、0.5 和两路 0.1 的 JEPA 系�
 和监督 horizon 内历史状态传播。rematerialization 只重算激活，不截断这个 horizon；
 梯度只在明确的 horizon 边界 detach，不能在每个 unit 或重计算分段重置状态。
 
-正式训练把 750-unit horizon 划分为若干 rematerialization segment。每段前向只保留段末
+正式训练把 375-unit horizon 划分为若干 rematerialization segment。每段前向只保留段末
 完整 recurrent state，以及各 unit 计算 Speech/Action/JEPA/PPO 所必需的轻量输出张量；
 段内逐步 H/C/RecentKV/SlowMemory 状态不进入持久输出列表，反向时从段首状态整段重放。
-segment 边界保持 autograd 连接，因此分段大小只影响显存与重算量，不改变 750-unit 监督语义。
+segment 边界保持 autograd 连接，因此分段大小只影响显存与重算量，不改变 375-unit 监督语义。
 
 ### 16.4 外部执行边界
 
@@ -825,7 +825,7 @@ segment 边界保持 autograd 连接，因此分段大小只影响显存与重�
 
 1. Canary 是唯一正式规模，使用公共训练入口和状态协议；后续规模另行设计。
 2. 所有训练 episode 按时间顺序处理，不能每个窗口重置状态。
-3. 正式 Canary 的 memory horizon 和 TBPTT 为 750 units。
+3. 正式 Canary 的 memory horizon 和 TBPTT 为 375 units。
 4. 所有 targets 配套 mask；缺失标签屏蔽对应 loss，不伪造 NOOP 或 SILENCE。
 5. 未来输出 loss 必须能够在 TBPTT 范围内回传到早期 C/SlowMemory 更新。
 6. 训练、验证、推理和恢复共享同一 forward_step 语义。
@@ -888,7 +888,9 @@ MiniCPM 或同类多模态主干可以提供视觉编码、音频编码、Percei
 - tbptt_units、memory_horizon_units、mixed precision；
 - loss weights、checkpoint cadence、manifest 和 run identity。
 
-Canary 的正式 horizon 为 750 units；Smoke 只缩小数值，不改变协议。
+Canary 的正式 horizon 为 375 units。正式 GPU capacity smoke 必须保持 Canary 的模型形状、
+RecentKV、TBPTT 和 memory horizon；只有快速 CPU 单元测试 fixture 可以缩小这些数值，且不构成
+Canary 容量证据。
 
 ## 21. 评测与消融
 

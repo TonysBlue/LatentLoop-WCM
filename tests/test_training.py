@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import pytest
 import torch
 from data import SyntheticEpisodeDataset, write_episode_shards
 from model import StreamingLatentLoop, compute_jepa_loss
 from model.losses import compute_losses
 from runtime.config import ProjectConfig
 from training import train
-from training.training import _rematerialized_segment
+from training.training import (
+    _accumulate_metric_numerator,
+    _rematerialized_segment,
+    _require_finite_training_losses,
+)
 
 
 class _RecordingTracker:
@@ -29,6 +34,25 @@ class _RecordingTracker:
     @property
     def run_url(self) -> None:
         return None
+
+
+def test_fp16_metric_accumulation_is_finite_and_detached() -> None:
+    accumulated = None
+    value = torch.tensor(55.0, dtype=torch.float16, requires_grad=True)
+    for _ in range(375):
+        accumulated = _accumulate_metric_numerator(accumulated, value, 8.0)
+
+    assert accumulated is not None
+    assert accumulated.dtype == torch.float32
+    assert torch.isfinite(accumulated)
+    assert not accumulated.requires_grad
+
+
+def test_non_finite_training_loss_is_rejected() -> None:
+    with pytest.raises(RuntimeError, match="loss_speech_codec"):
+        _require_finite_training_losses(
+            {"train/loss_total": 1.0, "train/loss_speech_codec": float("inf")}
+        )
 
 
 def test_recurrent_rematerialization_matches_direct_unroll(

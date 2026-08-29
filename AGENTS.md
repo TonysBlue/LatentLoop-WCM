@@ -139,7 +139,7 @@ Do not silently change these invariants:
 - Stream clock: one unit is 80 ms, 24 kHz audio, and exactly one Mimi frame.
 - Codec identity: `mimi-24khz-8x2048`, eight codebooks, vocabulary 2048,
   with the configured revision and weight SHA-256.
-- Context: the formal Canary profile retains 60 seconds (`750` units) of bounded
+- Context: the formal Canary profile retains 30 seconds (`375` units) of bounded
   per-layer KV state. KV is bounded and oldest context is evicted according to
   the model implementation; do not introduce unbounded cache growth.
 - State: recurrent KV, semantic memory slots, per-layer SlowMemory, audio cache, and speech-local state are

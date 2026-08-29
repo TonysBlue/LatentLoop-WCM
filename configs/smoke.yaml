@@ -1,3 +1,4 @@
+# Fast CPU/unit-test fixture. Use canary-gpu-smoke.yaml for model-capacity proof.
 model:
   model_dim: 64
   num_layers: 2

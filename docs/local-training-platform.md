@@ -261,9 +261,10 @@ Perceiver(O_(t+1)) -> stop-gradient JEPA target
 达到上限后，过期 H 的 K/V 由对应层的门控 Delta updater 写入固定容量 SlowMemory；每层
 读取自己的 SlowMemory，不共享矩阵。
 
-所有 profile 固定 `perceiver_slots=16`、`perceiver_layers=2`，并显式配置
-`semantic_memory_slots` 与 `jepa_layers`。Smoke 只缩小 model_dim、Backbone layers、KV horizon
-和数据预算，不改变状态转移或 JEPA 拓扑。JEPA Head 只读取 H，预测一个 80 ms 后的同形
+所有正式 GPU profile 固定 `perceiver_slots=16`、`perceiver_layers=2`，并显式配置
+`semantic_memory_slots` 与 `jepa_layers`。Canary GPU smoke 与 Canary 使用完全相同的模型形状、
+KV horizon 和 JEPA 拓扑，只缩小合成数据量、update 数与 tracking 预算。快速 CPU fixture 可以
+缩小模型和 horizon，但不构成容量验证。JEPA Head 只读取 H，预测一个 80 ms 后的同形
 Perceiver 表征；C 不直接进入任何输出 head。
 
 ### 7.3 语义 slots 与 SlowMemory
@@ -303,9 +304,15 @@ UTF-8 pending bytes 跨 unit。Harness 负责 schema、安全和权限校验。
 
 ## 8. 模型配置档位
 
-### 8.1 Smoke
+### 8.1 两类 Smoke
 
-Smoke 只缩小 model_dim、layers、screen shape、KV horizon 和数据量，用于张量、梯度、数据和恢复测试。它仍使用 80 ms unit、相同状态转移和相同 loss 代码。
+`configs/canary-gpu-smoke.yaml` 是正式容量 smoke：模型全部形状字段、375-unit RecentKV、
+TBPTT 和 memory horizon 与 Canary 完全相同，只使用显式 synthetic 数据并把 optimizer update
+缩到 1。它必须在本机 GPU 上真实完成 forward、backward、optimizer step、checkpoint，并要求
+所有训练 loss 有限。
+
+`configs/smoke.yaml` 是快速 CPU/unit-test fixture，可缩小模型、codec vocabulary 和 horizon，
+只用于张量契约、梯度等价、数据和恢复测试，不得用它证明 Canary 能放入显存。
 
 三阶段 Smoke 使用 `configs/recipes/smoke.yaml` 和 `configs/stages/smoke-*.yaml`，通过公共
 recipe runner 顺序执行 Pretrain、SFT 与 Online Recurrent PPO。监督阶段使用显式 synthetic
@@ -315,13 +322,18 @@ checkpoint 谱系和 evaluation/report 闭环，不得作为 Canary 的环境回
 
 ### 8.2 Local
 
-Local profile 用于单 GPU 完整结构验证，包含音频/视觉 encoder、语义 slots、每层 SlowMemory、750-unit 生产形状可配置的 RecentKV、两个行为 output heads、JEPA/Value 训练 head、checkpoint 和 W&B。
+Local profile 用于单 GPU 实验，正式容量结论以 Canary GPU smoke 为准。
 
 ### 8.3 Canary 正式契约
 
-Canary profile 使用正式 codec、trajectory/action schema、60 秒 KV（750 units）和 memory
-horizon 750。短回归可以覆盖 update 数和 tracking mode，但不得改变状态和数据协议。模型宽度、
-数据规模或硬件预算的扩展必须等待本机 Canary 报告并单独更新设计。
+Canary profile 使用 11,298,250 参数的 192 宽、8 层 Backbone，8 heads、768 FFN、16 个
+Perceiver slots、8 个共享语义 slots，以及正式 codec 与 trajectory/action schema。RecentKV、
+memory horizon、TBPTT 和 PPO window 均为 375 units（30 秒）。该规格按最重的 Online RL
+阶段选择：RTX 2080 SUPER 8 GiB 上，完整 375-unit rollout、冻结 reference、candidate 两个
+PPO epoch、SFT replay/preservation 和 optimizer update 的实测峰值 allocated 约 5.30 GiB、
+reserved 约 6.35 GiB。256 宽在 candidate backward OOM，224 宽仅剩不足 1 GiB，因此不采用。
+Online RL candidate 阶段由训练进程独占本机 GPU；Mimi worker 使用 CPU 或另一设备，不能与
+candidate 争抢同一张 8 GiB GPU。
 
 ## 9. 数据格式
 
@@ -373,7 +385,9 @@ reset 或把递归 state 移出训练进程。
 
 ### 10.2 优化配置
 
-optimizer、学习率、梯度累积、FP16、梯度裁剪和 checkpoint cadence 由配置定义。Canary 的 `tbptt_units` 和 `memory_horizon_units` 为 750；Smoke 可缩小但不能换代码路径。
+optimizer、学习率、梯度累积、FP16、梯度裁剪和 checkpoint cadence 由配置定义。Canary 与
+Canary GPU smoke 的 `tbptt_units` 和 `memory_horizon_units` 均为 375；快速 CPU fixture 可缩小，
+但不能换代码路径或充当容量证据。
 
 ### 10.3 Loss 契约
 
@@ -429,7 +443,7 @@ future Speech/Action loss
  -> earlier C / RecentKV / SlowMemory
 ```
 
-TBPTT 不能短于要验证的 memory horizon；生产使用 750 units。
+TBPTT 不能短于要验证的 memory horizon；Canary 使用 375 units。
 
 ### 10.6 Lookahead 与参数版本
 

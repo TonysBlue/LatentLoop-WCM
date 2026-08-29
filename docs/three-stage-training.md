@@ -182,9 +182,11 @@ config hash、严格 state-dict 键与形状、codec/action/data identity 共同
 | Pretrain updates | 1,000 |
 | SFT updates | 600 |
 | Online RL updates | 400 |
-| PPO window | 750 units |
+| model | 192 dim / 8 layers / 8 heads / 768 FFN |
+| parameter count | 11,298,250 |
+| PPO window | 375 units |
 | active lifetime | 1 |
-| memory / rollout horizon | 750 units |
+| memory / rollout horizon | 375 units |
 
 Canary 是完整训练链的小规模证明，不是删减版算法。它同样使用真实隔离电脑环境和
 连续生命期窗口。验收报告必须记录实际数据量、三个阶段的 update/consumed units、

@@ -44,7 +44,7 @@ $$
 $$
 
 `C_t` 不直接进入动作头，但通过 Backbone 影响 `H_t`。Reward、receipt、Judge 和任务
-成功信息只进入 Training System，不进入 `ObservationSignal`。PPO candidate 在 750-unit
+成功信息只进入 Training System，不进入 `ObservationSignal`。PPO candidate 在 375-unit
 recurrent window 上重放完整状态，更新 Encoder、Perceiver、Backbone、语义 memory、
 SlowMemory write controller 及输出头；通过 finite、reference-KL 和 SFT preservation
 门禁后才在 unit 边界原子切换。checkpoint 必须保存 `H/C/RecentKV/SlowMemory` 及
@@ -256,7 +256,7 @@ client，保留 Harness、环境与 codec session 供同一 checkpoint 恢复。
 
 ## 9. Canary 本机规模参数
 
-Canary 的 window 固定为 750 units，正式语义是一个智能体、一个 active lifetime session、
+Canary 的 window 固定为 375 units，正式语义是一个智能体、一个 active lifetime session、
 一条连续时间线。本机验证记录窗口封存/丢弃数、candidate 接纳/拒绝、finalization lag、
 reward、吞吐和峰值显存。多环境并行代表多个智能体/生命期，不属于这套单智能体自学习契约，
 不能作为吞吐优化暗中引入。后续规模不得通过复制 RL 循环实现；必须基于 Canary 证据重新

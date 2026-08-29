@@ -211,6 +211,26 @@ def _aggregate_update_metrics(
     return metrics
 
 
+def _accumulate_metric_numerator(
+    accumulated: torch.Tensor | None,
+    value: torch.Tensor,
+    denominator: float,
+) -> torch.Tensor:
+    """Accumulate reporting numerators in FP32 without retaining the training graph."""
+    contribution = value.detach().float() * denominator
+    return contribution if accumulated is None else accumulated + contribution
+
+
+def _require_finite_training_losses(metrics: dict[str, float]) -> None:
+    invalid = sorted(
+        name
+        for name, value in metrics.items()
+        if name.startswith("train/loss_") and not math.isfinite(value)
+    )
+    if invalid:
+        raise RuntimeError("non-finite training losses: " + ", ".join(invalid))
+
+
 def seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -322,9 +342,10 @@ def train(
 ) -> dict[str, Any]:
     if resume and init_from:
         raise ValueError("resume and init_from are mutually exclusive")
-    if config.data.dataset == "canary" and not torch.cuda.is_available():
+    requires_cuda = config.data.dataset == "canary" or config.runtime.require_cuda
+    if requires_cuda and not torch.cuda.is_available():
         raise RuntimeError(
-            "formal real-data training requires a CUDA GPU; "
+            "this training profile requires a CUDA GPU; "
             "torch.cuda.is_available() is false"
         )
     if config.training.stage == "rl":
@@ -525,9 +546,8 @@ def train(
                                 accumulated = chunk_losses.get(name, torch.zeros_like(value))
                                 chunk_losses[name] = accumulated + value
                                 unit_denoms = _loss_denominators([unit])
-                                chunk_numerators[name] = (
-                                    chunk_numerators.get(name, torch.zeros_like(value))
-                                    + value * unit_denoms[name]
+                                chunk_numerators[name] = _accumulate_metric_numerator(
+                                    chunk_numerators.get(name), value, unit_denoms[name]
                                 )
                                 chunk_denoms[name] += unit_denoms[name]
                             predictions = output.speech_codec_logits.detach().argmax(dim=-1)
@@ -563,11 +583,13 @@ def train(
                             ("jepa_prediction", jepa["prediction"]),
                             ("jepa_variance", jepa["variance"]),
                         ):
-                            chunk_numerators[name] = value * jepa_pairs
+                            chunk_numerators[name] = value.detach().float() * jepa_pairs
                             chunk_denoms[name] = float(jepa_pairs)
                         chunk_numerators["total"] = (
                             chunk_numerators["total"]
-                            + config.training.jepa_loss_weight * jepa["total"] * len(moved)
+                            + config.training.jepa_loss_weight
+                            * jepa["total"].detach().float()
+                            * len(moved)
                         )
                         accelerator.backward(losses["total"])
                         if accelerator.sync_gradients:
@@ -661,6 +683,7 @@ def train(
                         }
                     )
                     last_metrics = _aggregate_update_metrics(pending_update_metrics, config)
+                    _require_finite_training_losses(last_metrics)
                     pending_update_metrics = []
                     last_metrics.update(
                         {

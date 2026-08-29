@@ -1,10 +1,10 @@
 # Canary uses the complete Pretrain -> SFT -> Online RL recipe on a small real
 # dataset. Online RL uses Online Recurrent PPO; all three formal stages train the full model.
 model:
-  model_dim: 512
+  model_dim: 192
   num_layers: 8
   num_heads: 8
-  ffn_dim: 2048
+  ffn_dim: 768
   audio_tokens: 4
   audio_kernel: 400
   audio_stride: 160
@@ -17,14 +17,14 @@ model:
   rematerialization_segment_units: 32
   delta_time_fourier_bands: 8
   delta_time_base_period_ms: 80
-  kv_units: 750
-  kv_window_ms: 60000
+  kv_units: 375
+  kv_window_ms: 30000
   speech_frames_per_unit: 1
   speech_codebooks: 8
   speech_codebook_size: 2048
   speech_depth_layers: 2
   speech_depth_heads: 4
-  speech_depth_ffn_dim: 1024
+  speech_depth_ffn_dim: 384
   action_schema_id: structured-action-v1
   action_coordinate_grid_size: 32
   action_type_bytes_per_unit: 16
@@ -47,7 +47,7 @@ data:
   unit_audio_samples: 1920
   screen_height: 224
   screen_width: 224
-  episode_units: 750
+  episode_units: 375
   train_episodes: 1000
   seed: 17
 training:
@@ -55,7 +55,7 @@ training:
   max_updates: 1000
   weight_decay: 0.1
   gradient_accumulation_steps: 16
-  tbptt_units: 750
+  tbptt_units: 375
   mixed_precision: fp16
   max_grad_norm: 1.0
   checkpoint_every: 250
@@ -69,11 +69,11 @@ training:
   speech_loss_weight: 1.0
   action_loss_weight: 1.0
   jepa_loss_weight: 1.0
-  memory_horizon_units: 750
+  memory_horizon_units: 375
   min_learning_rate_ratio: 0.1
   rl:
     algorithm: online_recurrent_ppo
-    ppo_window_units: 750
+    ppo_window_units: 375
     ppo_epochs: 4
     candidate_max_reference_kl: 1.0
     candidate_max_eval_loss_ratio: 1.25

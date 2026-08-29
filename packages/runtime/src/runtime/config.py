@@ -26,9 +26,9 @@ class ModelConfig:
     rematerialization_segment_units: int = 32
     delta_time_fourier_bands: int = 8
     delta_time_base_period_ms: int = 80
-    # The formal Canary profile retains the most recent 60 seconds.
-    kv_units: int = 750
-    kv_window_ms: int = 60_000
+    # The formal Canary profile retains the most recent 30 seconds.
+    kv_units: int = 375
+    kv_window_ms: int = 30_000
     speech_frames_per_unit: int = 1
     speech_codebooks: int = 8
     speech_codebook_size: int = 2048
@@ -77,7 +77,7 @@ class TrainingConfig:
     max_updates: int = 10_000
     weight_decay: float = 0.1
     gradient_accumulation_steps: int = 16
-    tbptt_units: int = 750
+    tbptt_units: int = 375
     mixed_precision: str = "fp16"
     max_grad_norm: float = 1.0
     checkpoint_every: int = 500
@@ -91,7 +91,7 @@ class TrainingConfig:
     speech_loss_weight: float = 1.0
     action_loss_weight: float = 1.0
     jepa_loss_weight: float = 1.0
-    memory_horizon_units: int = 750
+    memory_horizon_units: int = 375
     min_learning_rate_ratio: float = 0.1
     rl: RLConfig = field(default_factory=lambda: RLConfig())
 
@@ -99,7 +99,7 @@ class TrainingConfig:
 @dataclass(slots=True)
 class RLConfig:
     algorithm: str = "online_recurrent_ppo"
-    ppo_window_units: int = 750
+    ppo_window_units: int = 375
     ppo_epochs: int = 4
     gae_lambda: float = 0.95
     discount_time_constant_ms: float = 10_000.0
@@ -108,7 +108,7 @@ class RLConfig:
     sft_replay_coef: float = 0.1
     on_policy_jepa_coef: float = 0.1
     replay_jepa_coef: float = 0.1
-    max_pending_reward_units: int = 750
+    max_pending_reward_units: int = 375
     candidate_max_reference_kl: float = 1.0
     candidate_max_eval_loss_ratio: float = 1.25
     candidate_max_rejections: int = 3
@@ -153,6 +153,7 @@ class RuntimeConfig:
     run_name: str = "train"
     recipe_name: str | None = None
     stage_name: str | None = None
+    require_cuda: bool = False
 
     def root_path(self) -> Path:
         return Path(self.experiment_root).expanduser().resolve()
@@ -339,16 +340,16 @@ class ProjectConfig:
         if self.training.tbptt_units != self.training.memory_horizon_units:
             raise ValueError("tbptt_units must equal memory_horizon_units")
         if (
-            self.data.dataset == "canary" and self.training.memory_horizon_units != 750
+            self.data.dataset == "canary" and self.training.memory_horizon_units != 375
         ):
-            raise ValueError("formal Canary memory horizon must be exactly 750 units")
+            raise ValueError("formal Canary memory horizon must be exactly 375 units")
         if (
             self.data.dataset == "canary"
             and self.model.rematerialization_segment_units
             >= self.training.memory_horizon_units
         ):
             raise ValueError(
-                "formal Canary rematerialization segment must be shorter than 750 units"
+                "formal Canary rematerialization segment must be shorter than 375 units"
             )
         if not 0 <= self.training.min_learning_rate_ratio <= 1:
             raise ValueError("min_learning_rate_ratio must be in [0, 1]")

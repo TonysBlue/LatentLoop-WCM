@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+
 import pytest
+from model import StreamingLatentLoop
 from runtime.config import load_config
 
 
@@ -50,6 +53,36 @@ def test_local_dev_and_canary_profiles_are_explicit() -> None:
     assert local.data.dataset == "synthetic"
     assert canary.data.dataset == "canary"
     assert canary.model.action_schema_id == "structured-action-v1"
+
+
+def test_canary_gpu_smoke_is_model_and_horizon_identical_to_canary() -> None:
+    canary = load_config("configs/canary.yaml")
+    gpu_smoke = load_config("configs/canary-gpu-smoke.yaml")
+
+    assert asdict(gpu_smoke.model) == asdict(canary.model)
+    assert gpu_smoke.data.dataset == "synthetic"
+    assert gpu_smoke.training.max_updates == 1
+    assert gpu_smoke.training.gradient_accumulation_steps == 1
+    assert gpu_smoke.runtime.require_cuda
+    assert gpu_smoke.model.kv_units == 375
+    assert gpu_smoke.model.kv_window_ms == 30_000
+    assert gpu_smoke.data.episode_units == 375
+    assert gpu_smoke.training.tbptt_units == 375
+    assert gpu_smoke.training.memory_horizon_units == 375
+    assert gpu_smoke.training.rl.ppo_window_units == 375
+    assert gpu_smoke.model.model_dim == 192
+    assert gpu_smoke.model.num_layers == 8
+    assert gpu_smoke.model.num_heads == 8
+    assert gpu_smoke.model.ffn_dim == 768
+    assert StreamingLatentLoop(gpu_smoke.model).parameter_count() == 11_298_250
+
+
+def test_fast_smoke_is_explicitly_not_the_canary_capacity_profile() -> None:
+    fast_smoke = load_config("configs/smoke.yaml")
+    canary = load_config("configs/canary.yaml")
+
+    assert asdict(fast_smoke.model) != asdict(canary.model)
+    assert fast_smoke.training.memory_horizon_units < canary.training.memory_horizon_units
 
 
 @pytest.mark.parametrize("removed_scale", ["pilot", "production"])
@@ -119,13 +152,22 @@ def test_formal_canary_training_requires_cuda(monkeypatch: pytest.MonkeyPatch) -
         train(load_config("configs/stages/canary-pretrain.yaml"))
 
 
+def test_canary_gpu_smoke_requires_cuda(monkeypatch: pytest.MonkeyPatch) -> None:
+    import torch
+    from training.training import train
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    with pytest.raises(RuntimeError, match="requires a CUDA GPU"):
+        train(load_config("configs/canary-gpu-smoke.yaml"))
+
+
 def test_formal_canary_requires_segmented_recurrent_rematerialization() -> None:
     config = load_config("configs/canary.yaml")
     assert config.model.rematerialization_segment_units < config.training.memory_horizon_units
     with pytest.raises(ValueError, match="segment must be shorter"):
         load_config(
             "configs/canary.yaml",
-            ["model.rematerialization_segment_units=750"],
+            ["model.rematerialization_segment_units=375"],
         )
 
 

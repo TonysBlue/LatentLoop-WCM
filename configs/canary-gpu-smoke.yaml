@@ -1,0 +1,27 @@
+defaults:
+  - canary
+  - _self_
+
+# Capacity gate: the complete Canary model and 375-unit recurrent horizon on
+# synthetic physical-shape inputs. Only run budget and external assets differ.
+data:
+  dataset: synthetic
+  source: synthetic
+  shards: null
+  manifest: null
+  episode_units: 375
+  train_episodes: 1
+training:
+  stage: pretrain
+  max_updates: 1
+  gradient_accumulation_steps: 1
+  checkpoint_every: 1
+  log_every: 1
+  backbone_train_mode: all
+tracking:
+  enabled: false
+  mode: disabled
+runtime:
+  experiment_root: ~/latentloop-data/experiments/canary-gpu-smoke/default
+  run_name: canary-gpu-smoke
+  require_cuda: true

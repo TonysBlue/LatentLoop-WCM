@@ -63,6 +63,9 @@ worker。
 需要定位问题或观察产物时使用：
 
 ```bash
+# 0a. 在本机 GPU 上验证与 Canary 完全同形的 375-unit 更新和 checkpoint
+uv run training train --config configs/canary-gpu-smoke.yaml
+
 # 0. 先通过测试专用物理协议实现验证公共三阶段 recipe、谱系和评估闭环
 uv run pytest -q tests/integration/test_three_stage_smoke_recipe.py
 
@@ -89,6 +92,14 @@ scripts/run-training.sh --recipe configs/recipes/canary.yaml --run-id canary-001
 
 ## 正式 Canary 训练
 
+8 GiB 本机 GPU 在 Online RL candidate 训练期间由 Training System 独占。启动 Mimi worker
+时设置 `MIMI_DEVICE=cpu`（或指向另一张 GPU），不得让 codec 与 375-unit PPO candidate
+争抢同一张卡：
+
+```bash
+MIMI_DEVICE=cpu scripts/codec-worker.sh
+```
+
 短闭环成功后运行配置中的完整预算：Pretrain 1,000、SFT 600、Online RL（Online Recurrent PPO）400 updates：
 
 ```bash
@@ -100,8 +111,9 @@ SFT checkpoint 作为 policy 和冻结 reference。
 
 三个正式 stage 使用同一条连续 episode 路径：按时间顺序处理每个 episode，持续传递
 RecentKV、C、SlowMemory、H、speech-local 和 action-local state。Canary 配置的
-`tbptt_units=750` 与
-`memory_horizon_units=750`，确保未来输出 loss 可以回传到长期记忆更新器；smoke 只缩小该数值。
+`tbptt_units=375` 与
+`memory_horizon_units=375`，确保未来输出 loss 可以回传到长期记忆更新器。正式 GPU smoke
+保持相同模型形状和 horizon；只有快速 CPU fixture 缩小这些数值，且不作为容量证据。
 W&B 中记录 speech mode、有效 codec 帧和 action frame 的监督密度。
 训练只使用 speech mode/codec 与 structured action frame loss；长期记忆没有独立
 target 或正则项。cosine 学习率最低保持为初始值的 10%。

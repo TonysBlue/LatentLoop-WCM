@@ -18,18 +18,24 @@ uv run data inspect-model --config configs/smoke.yaml
 uv run pytest
 ```
 
-`data inspect-model` 会验证配置并给出模型参数和 KV 规模。三个配置档位的参数量可用以下
-命令确认；GPU FP16 前反向由测试和正式训练启动门禁验证：
+`data inspect-model` 会验证配置并给出模型参数和 KV 规模。快速 CPU fixture 与正式 Canary
+容量配置分别用以下命令确认：
 
 ```bash
 uv run data inspect-model --config configs/smoke.yaml
-uv run data inspect-model --config configs/local-dev.yaml
-uv run data inspect-model --config configs/research-0.2b.yaml
+uv run data inspect-model --config configs/canary-gpu-smoke.yaml
+uv run data inspect-model --config configs/canary.yaml
 ```
 
-当前档位参数量约为 0.0003B、0.0507B 和 0.2424B。0.0507B 与 0.2424B 档位均已在
-RTX 2080 SUPER 8GB 上完成 FP16 反向和 AdamW 更新；实际长期训练仍应以运行时记录的
-`runtime/peak_memory_*` 指标为准。
+Canary 与 GPU capacity smoke 使用完全相同的 11,298,250 参数模型和 375-unit horizon。
+后者使用 synthetic 数据，在 RTX 2080 SUPER 8GB 上执行一次完整 FP16 forward、backward、
+AdamW update 与 checkpoint：
+
+```bash
+uv run training train --config configs/canary-gpu-smoke.yaml
+```
+
+`configs/smoke.yaml` 只是不代表容量的快速 CPU/unit-test fixture。
 
 ## 数据与训练
 
