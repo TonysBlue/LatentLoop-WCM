@@ -1,7 +1,7 @@
 # 统一三阶段训练架构
 
 > 状态：最终目标训练契约
-> 日期：2026-08-26
+> 日期：2026-08-29
 > 关联文档：[实时流多模态 LatentLoop](realtime-multimodal-latent-loop.md) · [Online RL：Online Recurrent PPO 与隔离环境](online-recurrent-ppo-training.md)
 
 ## 1. 总体定义
@@ -21,8 +21,9 @@ Online RL 的当前正式算法固定为 Online Recurrent PPO。先在本机验�
 模型运行时始终只有两个输出头：Speech Head 直接输出 speech mode 与 Mimi codec token；
 Unified Action Head 通过一个结构化 ActionFrame schema 输出全部电脑操作。RL 的 Value Head
 是训练专用估值组件，不跨 Model Service 边界，也不承担独立 memory loss。
-三个阶段共享同一个 Perceiver、Predictor、WorldStateUpdate、Backbone、PredictionAdapter
-和 Future Gate；没有 EMA target encoder 或独立 Reasoner。
+三个阶段共享同一个 Perceiver、JEPAHead、Backbone、语义 memory slots `C_t` 和
+每层 SlowMemory；没有外部 WorldStateUpdate、EMA target encoder 或独立 Reasoner。
+行为输出只读取 `H_t`，JEPA target 侧 stop-gradient；SlowMemory 没有独立 memory loss。
 
 ## 2. 三类独立数据
 

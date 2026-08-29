@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 import torch
-from model.types import ActionLocalState, LayerKV, RecurrentState, SpeechLocalState
+from model.types import ActionLocalState, LayerKV, RecurrentState, SlowMemoryState, SpeechLocalState
 from torch import nn
 
 
@@ -31,7 +31,7 @@ class CheckpointMetadata:
     codec_weight_hash: str
     git_commit: str
     codec_revision: str = "unknown"
-    architecture_id: str = "latentloop-perceiver-jepa-v1"
+    architecture_id: str = "latentloop-perceiver-jepa-memory-v2"
     parent_sha256: str | None = None
     stage: str = "pretrain"
     algorithm: str | None = None
@@ -73,7 +73,11 @@ def _serialize_state(state: RecurrentState | None) -> dict[str, Any] | None:
             (cache.key.cpu(), cache.value.cpu())
             for cache in state.layer_kv
         ],
-        "latent": state.latent.cpu(),
+        "semantic_memory": state.semantic_memory.cpu(),
+        "slow_memory": [
+            {"matrix": memory.matrix.cpu(), "normalizer": memory.normalizer.cpu()}
+            for memory in state.slow_memory
+        ],
         "audio_cache": state.audio_cache.cpu(),
         "hidden": state.hidden.cpu(),
         "speech_local": {
@@ -103,7 +107,11 @@ def _deserialize_state(
             LayerKV(key=key.to(device), value=value.to(device))
             for key, value in payload["layer_kv"]
         ),
-        latent=payload["latent"].to(device),
+        semantic_memory=payload["semantic_memory"].to(device),
+        slow_memory=tuple(
+            SlowMemoryState(item["matrix"].to(device), item["normalizer"].to(device))
+            for item in payload["slow_memory"]
+        ),
         audio_cache=payload["audio_cache"].to(device),
         hidden=payload["hidden"].to(device),
         speech_local=SpeechLocalState(
@@ -132,7 +140,7 @@ def _parse_metadata(payload: Any) -> CheckpointMetadata:
         )
     if "algorithm" not in payload:
         raise ValueError("checkpoint algorithm identity is missing")
-    if payload.get("architecture_id") != "latentloop-perceiver-jepa-v1":
+    if payload.get("architecture_id") != "latentloop-perceiver-jepa-memory-v2":
         raise ValueError("checkpoint architecture identity is missing or obsolete")
     return CheckpointMetadata(**payload)
 

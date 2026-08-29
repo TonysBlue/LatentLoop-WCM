@@ -6,15 +6,16 @@ from torch import Tensor, nn
 from torch.utils.checkpoint import checkpoint
 
 from model.action import ActionHead
-from model.attention import StreamingTransformerLayer
+from model.attention import SlowMemory, StreamingTransformerLayer
 from model.encoders import DeltaTimeEncoder, StreamingAudioEncoder, VisionEncoder
-from model.perceiver import Perceiver, PredictionAdapter, Predictor
+from model.perceiver import JEPAHead, Perceiver
 from model.speech import FactorizedSpeechHead
 from model.types import (
     ActionFrame,
     GenerationOutput,
     LayerKV,
     RecurrentState,
+    SlowMemoryState,
     SpeechLocalState,
     SpeechMode,
     SpeechSamplingConfig,
@@ -24,43 +25,8 @@ from model.types import (
 from model.value import ValueHead
 
 
-class WorldStateUpdate(nn.Module):
-    def __init__(self, model_dim: int, latent_dim: int, heads: int, slots: int) -> None:
-        super().__init__()
-        self.latent_to_model = nn.Linear(latent_dim, model_dim)
-        self.slot_identity = nn.Parameter(torch.zeros(slots, model_dim))
-        self.slot_identity_latent = nn.Parameter(torch.zeros(slots, latent_dim))
-        self.read = nn.MultiheadAttention(model_dim, heads, batch_first=True)
-        self.model_to_latent = nn.Linear(model_dim, latent_dim)
-        self.candidate = nn.Sequential(
-            nn.Linear(latent_dim * 2, latent_dim * 2),
-            nn.GELU(),
-            nn.Linear(latent_dim * 2, latent_dim),
-        )
-        self.gate = nn.Linear(latent_dim * 2, latent_dim)
-        self.gate_bias = nn.Parameter(torch.tensor(-2.0))
-        self.residual_scale = 0.1
-        self.norm = nn.LayerNorm(latent_dim)
-        nn.init.normal_(self.slot_identity, std=0.02)
-        nn.init.normal_(self.slot_identity_latent, std=0.02)
-
-    def _context(self, latent: Tensor, previous_hidden: Tensor) -> Tensor:
-        query = self.latent_to_model(latent) + self.slot_identity[None]
-        context, _ = self.read(query, previous_hidden, previous_hidden, need_weights=False)
-        return self.model_to_latent(context)
-
-    def forward(self, latent: Tensor, previous_hidden: Tensor) -> Tensor:
-        context = self._context(latent, previous_hidden)
-        combined = torch.cat((latent, context), dim=-1)
-        # Slot identity must affect the first write even when Z_0 and H_0 are
-        # both zero; otherwise every slot remains exactly symmetric.
-        candidate = self.candidate(combined) + self.slot_identity_latent[None]
-        gate = torch.sigmoid(self.gate(combined) + self.gate_bias)
-        return self.norm(latent + self.residual_scale * gate * candidate)
-
-
 class StreamingLatentLoop(nn.Module):
-    """Final target: bounded KV, recurrent Z/H state, independent speech/action heads."""
+    """Streaming multimodal model with shared semantic slots and long memory."""
 
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
@@ -84,18 +50,16 @@ class StreamingLatentLoop(nn.Module):
             config.perceiver_layers,
             config.dropout,
         )
-        self.predictor = Predictor(
+        self.jepa_head = JEPAHead(
             dim,
-            config.latent_dim,
+            config.model_dim,
             config.num_heads,
             config.ffn_dim,
             config.perceiver_slots,
             config.predictor_layers,
             config.dropout,
         )
-        self.prediction_adapter = PredictionAdapter(dim)
-        self.future_embedding = nn.Parameter(torch.zeros(config.perceiver_slots, dim))
-        self.latent_reader = nn.Linear(config.latent_dim, dim)
+        self.semantic_slot_identity = nn.Parameter(torch.zeros(config.semantic_memory_slots, dim))
         self.layers = nn.ModuleList(
             StreamingTransformerLayer(
                 dim=dim,
@@ -107,16 +71,24 @@ class StreamingLatentLoop(nn.Module):
             for index in range(config.num_layers)
         )
         self.final_norm = nn.LayerNorm(dim)
-        self.world_state_update = WorldStateUpdate(
-            dim, config.latent_dim, config.num_heads, config.latent_slots
-        )
+        self.semantic_attention = nn.MultiheadAttention(dim, config.num_heads, batch_first=True)
+        self.semantic_gate = nn.Linear(dim * 2, 1)
+        self.slow_memory = SlowMemory(config.num_heads, dim // config.num_heads)
+        self.predictor = self.jepa_head
         self.speech_head = FactorizedSpeechHead(config)
         self.action_head = ActionHead(config)
-        self.value_head = ValueHead(config.model_dim, config.latent_dim, config.num_heads)
+        self.value_head = ValueHead(config.model_dim, config.model_dim, config.num_heads)
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        nn.init.normal_(self.future_embedding, std=0.02)
+        nn.init.normal_(self.semantic_slot_identity, std=0.02)
+        nn.init.constant_(self.semantic_gate.bias, -2.0)
+
+    def semantic_memory_update(self, previous: Tensor, hidden: Tensor) -> Tensor:
+        query = previous + self.semantic_slot_identity[None]
+        context, _ = self.semantic_attention(query, hidden, hidden, need_weights=False)
+        gate = torch.sigmoid(self.semantic_gate(torch.cat((query, context), dim=-1)))
+        return previous + gate * (context - previous)
 
     def initial_state(self, batch_size: int, device: torch.device | str) -> RecurrentState:
         dtype = next(self.parameters()).dtype
@@ -135,12 +107,24 @@ class StreamingLatentLoop(nn.Module):
         )
         return RecurrentState(
             layer_kv=empty_kv,
-            latent=torch.zeros(
+            semantic_memory=torch.zeros(
                 batch_size,
-                self.config.latent_slots,
-                self.config.latent_dim,
+                self.config.semantic_memory_slots,
+                self.config.model_dim,
                 device=device,
                 dtype=dtype,
+            ),
+            slow_memory=tuple(
+                SlowMemoryState(
+                    matrix=torch.zeros(
+                        batch_size, self.config.num_heads, head_dim, head_dim,
+                        device=device, dtype=dtype,
+                    ),
+                    normalizer=torch.zeros(
+                        batch_size, self.config.num_heads, head_dim,
+                        device=device, dtype=dtype,
+                    ),
+                ) for _ in self.layers
             ),
             audio_cache=torch.zeros(
                 batch_size, self.audio_encoder.cache_samples, device=device, dtype=dtype
@@ -189,53 +173,51 @@ class StreamingLatentLoop(nn.Module):
         sampling: SpeechSamplingConfig | None = None,
     ) -> StepOutput:
         perceived, audio_cache = self.encode_observation(unit, state.audio_cache)
-        updated_latent = self.world_state_update(state.latent, state.hidden)
-        predicted_next = self.predictor(perceived, updated_latent)
-        future = self.prediction_adapter(predicted_next.detach()) + self.future_embedding[None]
-        world = self.latent_reader(updated_latent)
+        semantic = state.semantic_memory + self.semantic_slot_identity[None]
         new_caches: list[LayerKV] = []
+        new_memories: list[SlowMemoryState] = []
         gates: list[Tensor] = []
         max_kv_tokens = self.config.kv_units * self.config.perceiver_slots
-        hidden = perceived
+        hidden = perceived + state.hidden
         for layer, cache in zip(self.layers, state.layer_kv, strict=True):
             if self.training and self.config.activation_checkpointing:
 
                 def layer_forward(
                     current: Tensor,
-                    current_world: Tensor,
-                    current_future: Tensor,
                     key: Tensor,
                     value: Tensor,
+                    matrix: Tensor,
+                    normalizer: Tensor,
                     layer: StreamingTransformerLayer = layer,
-                ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-                    output, updated, gate = layer(
-                        current,
-                        current_world,
-                        current_future,
-                        LayerKV(key, value),
-                        max_kv_tokens,
+                ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+                    output, updated, memory, gate = layer(
+                        current, cache=LayerKV(key, value), max_tokens=max_kv_tokens,
+                        slow_memory=self.slow_memory,
+                        slow_state=SlowMemoryState(matrix, normalizer),
+                        semantic_memory=semantic,
                     )
-                    return output, updated.key, updated.value, gate
+                    return (
+                        output, updated.key, updated.value,
+                        memory.matrix, memory.normalizer, gate,
+                    )
 
-                hidden, key, value, gate = checkpoint(
-                    layer_forward,
-                    hidden,
-                    world,
-                    future,
-                    cache.key,
-                    cache.value,
+                hidden, key, value, matrix, normalizer, gate = checkpoint(
+                    layer_forward, hidden, cache.key, cache.value,
+                    state.slow_memory[len(new_caches)].matrix,
+                    state.slow_memory[len(new_caches)].normalizer,
                     use_reentrant=False,
                 )
                 new_cache = LayerKV(key, value)
+                new_memory = SlowMemoryState(matrix, normalizer)
             else:
-                hidden, new_cache, gate = layer(
-                    hidden,
-                    world,
-                    future,
-                    cache,
-                    max_kv_tokens,
+                hidden, new_cache, new_memory, gate = layer(
+                    hidden, cache=cache, max_tokens=max_kv_tokens,
+                    slow_memory=self.slow_memory,
+                    slow_state=state.slow_memory[len(new_caches)],
+                    semantic_memory=semantic,
                 )
             new_caches.append(new_cache)
+            new_memories.append(new_memory)
             gates.append(gate)
         hidden = self.final_norm(hidden)
         speech_context = self.speech_head.context(hidden)
@@ -269,9 +251,12 @@ class StreamingLatentLoop(nn.Module):
             action_teacher_mask,
             sampling_temperature=(sampling.temperature if sampling is not None else None),
         )
+        semantic = self.semantic_memory_update(semantic, hidden)
+        predicted_next = self.jepa_head(hidden, semantic)
         next_state = RecurrentState(
             layer_kv=tuple(new_caches),
-            latent=updated_latent,
+            semantic_memory=semantic,
+            slow_memory=tuple(new_memories),
             audio_cache=audio_cache,
             hidden=hidden,
             speech_local=SpeechLocalState(temporal=speech_temporal, previous_codes=next_codes),
@@ -288,7 +273,7 @@ class StreamingLatentLoop(nn.Module):
             predicted_next_slots=predicted_next,
             future_gate_mean=torch.stack([gate.mean() for gate in gates]).mean(),
             future_gate_max=torch.stack([gate.max() for gate in gates]).max(),
-            value=self.value_head(hidden, updated_latent),
+            value=self.value_head(hidden, semantic),
             selected_speech_mode=mode,
         )
 

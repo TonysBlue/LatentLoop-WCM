@@ -25,15 +25,16 @@ def test_recurrent_state_is_bounded_and_heads_receive_gradients(
     assert output is not None
     max_tokens = smoke_config.model.kv_units * smoke_config.model.perceiver_slots
     assert all(cache.key.shape[2] == max_tokens for cache in state.layer_kv)
-    assert state.latent.shape == (
+    assert state.semantic_memory.shape == (
         1,
         smoke_config.model.latent_slots,
-        smoke_config.model.latent_dim,
+        smoke_config.model.model_dim,
     )
     total.backward()
     assert model.audio_encoder.conv.weight.grad is not None
     assert model.vision_encoder.encoder[0].weight.grad is not None
-    assert model.world_state_update.gate.weight.grad is not None
+    assert model.semantic_gate.weight.grad is not None
+    assert model.slow_memory.write_gate.weight.grad is not None
     assert model.speech_head.depth_embeddings[0].weight.grad is not None
     assert model.action_head.kind_output.weight.grad is not None
     assert model.speech_head.mode.weight.grad is not None
@@ -56,7 +57,8 @@ def test_detach_breaks_tbptt_graph(smoke_config: ProjectConfig) -> None:
     model = StreamingLatentLoop(smoke_config.model)
     unit = SyntheticEpisodeDataset(smoke_config.data, smoke_config.model).make_episode(0).units[0]
     state = model(unit, model.initial_state(1, "cpu")).state.detach()
-    assert state.latent.grad_fn is None
+    assert state.semantic_memory.grad_fn is None
+    assert all(memory.matrix.grad_fn is None for memory in state.slow_memory)
     assert all(cache.key.grad_fn is None for cache in state.layer_kv)
 
 

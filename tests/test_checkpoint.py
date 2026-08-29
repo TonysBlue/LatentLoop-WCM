@@ -52,6 +52,8 @@ def test_checkpoint_restores_full_recurrent_step(
     payload = torch.load(path, map_location="cpu", weights_only=False)
     assert "format_version" not in payload
     assert "world_state_update_version" not in payload["metadata"]
+    assert "semantic_memory" in payload["recurrent_state"]
+    assert "slow_memory" in payload["recurrent_state"]
     assert "delta_time_encoder_version" not in payload["metadata"]
     expected = model(episode.units[1], first.state.detach()).speech_codec_logits.detach()
 

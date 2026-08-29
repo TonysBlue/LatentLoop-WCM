@@ -1,10 +1,43 @@
 # Online RL：Online Recurrent PPO 与真实隔离电脑环境
 
 > 状态：最终目标 Online RL 阶段、Online Recurrent PPO 算法与环境协议
-> 日期：2026-08-26
+> 日期：2026-08-29
 > 关联文档：[统一三阶段训练架构](three-stage-training.md) · [统一电脑动作输出协议](unified-action.md) · [物理 Rollout 闭环](protocols/physical-rollout.md)
 
 ## 1. 环境选择
+
+## 0. RL 模型结构
+
+```text
+ObservationSignal O_t
+    -> Audio/Vision/Time Encoders
+    -> Perceiver -> P_t
+    -> Backbone(P_t, H_(t-1), C_(t-1), RecentKV, SlowMemory)
+    -> H_t, C_t
+       |-> SpeechHead -> speech codec action
+       |-> ActionHead -> structured ControlSignal
+       `-> JEPAHead -> predict P_(t+1)
+
+speech/action -> Harness -> physical environment -> O_(t+1), receipt, RewardEvent
+```
+
+```text
+S_t = {H_t, C_t, RecentKV_t, SlowMemory_t, speech_local_t, action_local_t}
+
+rho_t = exp(log pi_theta(a_t | S_t) - log pi_old(a_t | S_t))
+
+L_RL = L_actor + c_v L_value - c_H Entropy
+     + beta KL(pi_theta || pi_SFT)
+     + lambda_jepa L_JEPA
+     + lambda_sft L_SFT_replay
+```
+
+`C_t` 不直接进入动作头，但通过 Backbone 影响 `H_t`。Reward、receipt、Judge 和任务
+成功信息只进入 Training System，不进入 `ObservationSignal`。PPO candidate 在 750-unit
+recurrent window 上重放完整状态，更新 Encoder、Perceiver、Backbone、语义 memory、
+SlowMemory write controller 及输出头；通过 finite、reference-KL 和 SFT preservation
+门禁后才在 unit 边界原子切换。checkpoint 必须保存 `H/C/RecentKV/SlowMemory` 及
+冻结 reference 的对应状态。
 
 Canary 是当前唯一正式规模，使用真实隔离电脑环境。正式 Online RL 当前唯一允许的算法是
 Online Recurrent PPO。它使用一个生命期

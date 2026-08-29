@@ -1,5 +1,5 @@
 model:
-  architecture_id: latentloop-perceiver-jepa-v1
+  architecture_id: latentloop-perceiver-jepa-memory-v2
   model_dim: 896
   latent_dim: 1024
   num_layers: 18
@@ -14,7 +14,9 @@ model:
   perceiver_layers: 2
   predictor_layers: 2
   latent_slots: 16
-  world_state_update_type: gated_residual
+  semantic_memory_slots: 16
+  slow_memory_type: gated_delta
+  rematerialization_segment_units: 32
   delta_time_fourier_bands: 8
   delta_time_base_period_ms: 80
   kv_units: 750

@@ -10,7 +10,7 @@ from omegaconf import OmegaConf
 
 @dataclass(slots=True)
 class ModelConfig:
-    architecture_id: str = "latentloop-perceiver-jepa-v1"
+    architecture_id: str = "latentloop-perceiver-jepa-memory-v2"
     model_dim: int = 256
     latent_dim: int = 256
     num_layers: int = 4
@@ -25,7 +25,9 @@ class ModelConfig:
     perceiver_layers: int = 2
     predictor_layers: int = 2
     latent_slots: int = 8
-    world_state_update_type: str = "gated_residual"
+    semantic_memory_slots: int = 8
+    slow_memory_type: str = "gated_delta"
+    rematerialization_segment_units: int = 32
     delta_time_fourier_bands: int = 8
     delta_time_base_period_ms: int = 80
     # The formal Canary profile retains the most recent 60 seconds.
@@ -191,8 +193,8 @@ class ProjectConfig:
         expected_kv_units = -(-self.model.kv_window_ms // self.data.unit_ms)
         if self.model.kv_units != expected_kv_units:
             raise ValueError("KV must exactly cover kv_window_ms at the configured unit_ms")
-        if self.model.architecture_id != "latentloop-perceiver-jepa-v1":
-            raise ValueError("model.architecture_id must be latentloop-perceiver-jepa-v1")
+        if self.model.architecture_id != "latentloop-perceiver-jepa-memory-v2":
+            raise ValueError("model.architecture_id must be latentloop-perceiver-jepa-memory-v2")
         if self.model.vision_tokens != 16:
             raise ValueError("vision_tokens must be 16")
         if (
@@ -201,8 +203,12 @@ class ProjectConfig:
             or self.model.predictor_layers != 2
         ):
             raise ValueError("Perceiver/Predictor topology must be 16 slots and 2/2 layers")
-        if self.model.world_state_update_type != "gated_residual":
-            raise ValueError("world_state_update_type must be gated_residual")
+        if self.model.slow_memory_type != "gated_delta":
+            raise ValueError("slow_memory_type must be gated_delta")
+        if self.model.semantic_memory_slots < 1:
+            raise ValueError("semantic_memory_slots must be positive")
+        if self.model.rematerialization_segment_units < 1:
+            raise ValueError("rematerialization segment must be positive")
         if self.model.delta_time_fourier_bands < 1:
             raise ValueError("delta time Fourier bands must be positive")
         if self.model.delta_time_base_period_ms < 1:

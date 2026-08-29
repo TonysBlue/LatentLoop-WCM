@@ -1,12 +1,38 @@
 # 实时流多模态 LatentLoop 完整方案
 
 > 状态：项目顶层最终架构文档
-> 日期：2026-08-20
+> 日期：2026-08-29
 > 目标：构建持续接收真实混合麦克风和屏幕流、直接生成语音并控制电脑的 always-on 全双工多模态模型。
 > 专项协议：[直接流式语音实施说明](direct-speech.md) · [统一电脑动作输出协议](unified-action.md)
 > 训练协议：[统一三阶段训练架构](three-stage-training.md) · [Online RL：Online Recurrent PPO 与真实隔离电脑环境](online-recurrent-ppo-training.md)
 
 ## 1. 方案概述
+
+### 1.0 当前架构：语义 slots 与长期关联记忆
+
+当前正式模型使用 Backbone 内的共享语义 memory slots `C_t`，替代外部
+`WorldStateUpdate/Z_t`。`H_t` 是当前工作状态，`C_t` 是跨 unit 保存的语义状态；
+`C_t` 不直接连接 Speech/Action/Value/JEPA heads，只通过下一 unit 的 Backbone
+影响 `H_t`。每层 RecentKV 保留最近 750 units 的精确历史，过期 KV 经过 surprise
+gate 和 Delta/KDA 更新写入固定容量 SlowMemory。
+
+```text
+O_t -> Encoders -> Perceiver -> P_t
+P_t + H_(t-1) + C_(t-1) + RecentKV + SlowMemory
+    -> Backbone -> H_t, C_t
+H_t -> SpeechHead / ActionHead / JEPAHead
+expired KV -> MemoryUpdater -> SlowMemory_t
+```
+
+```text
+P_hat_(t+1) = JEPAHead(H_t, C_t)
+P_target_(t+1) = stop_gradient(Perceiver(O_(t+1)))
+L_JEPA = distance(P_hat_(t+1), P_target_(t+1))
+```
+
+`RecentKV` 是短期精确上下文；`SlowMemory` 是每层固定容量的长期关联摘要；`C_t`
+是共享语义/认知状态。SlowMemory 不是完整 softmax attention 的严格等价替代，750
+unit 窗口内仍保持 RecentKV 精确语义。
 
 ### 1.1 系统边界
 
@@ -28,45 +54,21 @@ ActionFrame；这些模型输出不作为 Model Service 与 Harness 的直接执
 共享 Data 负责 capture、replay、监督 episode、online rollout、manifest、审计和
 readiness，不隶属于 Training System。
 
-实时流多模态 LatentLoop 是一个运行在真实环境反馈闭环中的递归多模态模型。模型以 80 ms 为一个统一时间单元，持续接收单路混合麦克风音频、屏幕输入和当前观察的时间间隔，通过有界逐层 KV Cache 保存近期精确历史，通过固定容量的抽象 latent workspace `Z_t` 保存长期任务状态，并使用独立 Speech Head 与 Unified Action Head 并行输出。`Z_t` 是模型内部的递归表示，不要求逐一对应真实世界的物理变量，也不要求遵循严格的连续时间动力学。
+实时流多模态 LatentLoop 是一个运行在真实环境反馈闭环中的递归多模态模型。模型以 80 ms 为一个统一时间单元，持续接收单路混合麦克风音频、屏幕输入和当前观察的时间间隔，通过有界逐层 KV Cache 保存近期精确历史，通过共享语义 slots `C_t` 与固定容量 SlowMemory 保存长期状态，并使用独立 Speech Head 与 Unified Action Head 并行输出。
 
 每个时间单元严格执行：
 
-$$
-P_t = \mathrm{Perceiver}(O_t)
-$$
+```text
+P_t = Perceiver(O_t)
+(H_t, C_t, RecentKV_t, SlowMemory_t) =
+    Backbone(P_t, H_(t-1), C_(t-1), RecentKV_(t-1), SlowMemory_(t-1))
+U_t = SpeechHead(H_t), ActionHead(H_t)
+P_hat_(t+1) = JEPAHead(H_t, C_t)
+O_(t+1) = Environment(O_t, U_t)
+```
 
-$$
-Z_t = \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1})
-$$
-
-$$
-\widehat{P}_{t+1\mid t} = \mathrm{Predictor}(P_t, Z_t)
-$$
-
-$$
-F_t = \mathrm{PredictionAdapter}\left(\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})\right) + E_{\mathrm{future}}
-$$
-
-$$
-(H_t, \mathrm{KV}_t) = \mathrm{Backbone}
-\left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right)
-$$
-
-$$
-U_t = \left(
-\mathrm{SpeechHead}(H_t, \mathrm{speech\_local}_{t-1}),
-\mathrm{ActionHead}(H_t, \mathrm{action\_local}_{t-1})
-\right)
-$$
-
-$$
-O_{t+1} = \mathrm{Environment}(O_t, U_t)
-$$
-
-H_t 是主干经过 final normalization 后的完整 16-slot hidden 序列，必须暂存到下一单元；
-不存在独立 Reasoner。Predictor 的输出不是递归状态，Future slots 也不直接写入 KV。
-环境执行结果只通过下一 unit 的真实混合音频和屏幕输入返回模型，不存在显式 ActionEncoder。
+H_t 是主干当前工作 token，C_t 是持久语义 slots；环境结果只通过下一 unit 的真实
+混合音频和屏幕输入返回模型，不存在显式 ActionEncoder。
 
 ## 2. 设计目标
 

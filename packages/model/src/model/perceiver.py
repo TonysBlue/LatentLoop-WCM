@@ -85,8 +85,8 @@ class _PredictorBlock(nn.Module):
         return slots + self.dropout(self.ffn(self.ffn_norm(slots)))
 
 
-class Predictor(nn.Module):
-    """Predict the slot-aligned Perceiver representation one stream unit ahead."""
+class JEPAHead(nn.Module):
+    """Predict the next Perceiver representation from the causal state."""
 
     def __init__(
         self,
@@ -107,9 +107,9 @@ class Predictor(nn.Module):
         self.final_norm = nn.LayerNorm(dim)
         nn.init.normal_(self.slot_identity, std=0.02)
 
-    def forward(self, current: Tensor, world: Tensor) -> Tensor:
-        slots = current + self.slot_identity[None]
-        projected_world = self.world_projection(world)
+    def forward(self, hidden: Tensor, semantic_memory: Tensor) -> Tensor:
+        slots = hidden + self.slot_identity[None]
+        projected_world = self.world_projection(semantic_memory)
         for layer in self.layers:
             slots = layer(slots, projected_world)
         return self.final_norm(slots)
@@ -130,4 +130,6 @@ class PredictionAdapter(nn.Module):
         return self.projection(self.norm(predicted))
 
 
-__all__ = ["Perceiver", "PredictionAdapter", "Predictor"]
+Predictor = JEPAHead
+
+__all__ = ["Perceiver", "PredictionAdapter", "JEPAHead", "Predictor"]

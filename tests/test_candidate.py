@@ -44,7 +44,7 @@ def test_accepted_candidate_does_not_mutate_recurrent_state(smoke_config) -> Non
 
     assert applied
     assert recurrent_state.unit_index.item() == 37
-    assert torch.equal(recurrent_state.latent, before.latent)
+    assert torch.equal(recurrent_state.semantic_memory, before.semantic_memory)
     assert torch.equal(recurrent_state.action_local.held_buttons, before.action_local.held_buttons)
 
 

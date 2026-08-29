@@ -23,12 +23,12 @@ class ValueHead(nn.Module):
         )
         nn.init.normal_(self.query, std=0.02)
 
-    def forward(self, hidden: Tensor, latent: Tensor) -> Tensor:
+    def forward(self, hidden: Tensor, semantic_memory: Tensor) -> Tensor:
         query = self.query[None].expand(hidden.shape[0], -1, -1)
         state_query, _ = self.query_attention(query, hidden, hidden, need_weights=False)
         state_query = self.query_norm(state_query[:, 0])
-        pooled_latent = self.latent_projection(latent.mean(dim=1))
-        return self.network(torch.cat((state_query, pooled_latent), dim=-1)).squeeze(-1)
+        pooled_memory = self.latent_projection(semantic_memory.mean(dim=1))
+        return self.network(torch.cat((state_query, pooled_memory), dim=-1)).squeeze(-1)
 
 
 __all__ = ["ValueHead"]

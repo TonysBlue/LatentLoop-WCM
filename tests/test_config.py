@@ -17,7 +17,7 @@ def test_load_config_with_override() -> None:
 
 def test_world_state_and_delta_time_configuration_is_bounded() -> None:
     config = load_config("configs/smoke.yaml")
-    assert config.model.world_state_update_type == "gated_residual"
+    assert config.model.slow_memory_type == "gated_delta"
     with pytest.raises(ValueError, match="Fourier bands"):
         load_config("configs/smoke.yaml", ["model.delta_time_fourier_bands=0"])
     with pytest.raises(ValueError, match="base period"):

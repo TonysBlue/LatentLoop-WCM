@@ -354,6 +354,17 @@ class LayerKV:
 
 
 @dataclass(slots=True)
+class SlowMemoryState:
+    """Fixed-capacity per-layer associative memory."""
+
+    matrix: Tensor
+    normalizer: Tensor
+
+    def detach(self) -> SlowMemoryState:
+        return SlowMemoryState(self.matrix.detach(), self.normalizer.detach())
+
+
+@dataclass(slots=True)
 class SpeechLocalState:
     temporal: Tensor
     previous_codes: Tensor
@@ -387,17 +398,28 @@ class ActionLocalState:
 @dataclass(slots=True)
 class RecurrentState:
     layer_kv: tuple[LayerKV, ...]
-    latent: Tensor
+    semantic_memory: Tensor
+    slow_memory: tuple[SlowMemoryState, ...]
     audio_cache: Tensor
     hidden: Tensor
     speech_local: SpeechLocalState
     action_local: ActionLocalState
     unit_index: Tensor
 
+    @property
+    def latent(self) -> Tensor:
+        """Compatibility alias for checkpoints/tools written before C_t."""
+        return self.semantic_memory
+
+    @latent.setter
+    def latent(self, value: Tensor) -> None:
+        self.semantic_memory = value
+
     def detach(self) -> RecurrentState:
         return RecurrentState(
             layer_kv=tuple(cache.detach() for cache in self.layer_kv),
-            latent=self.latent.detach(),
+            semantic_memory=self.semantic_memory.detach(),
+            slow_memory=tuple(memory.detach() for memory in self.slow_memory),
             audio_cache=self.audio_cache.detach(),
             hidden=self.hidden.detach(),
             speech_local=self.speech_local.detach(),

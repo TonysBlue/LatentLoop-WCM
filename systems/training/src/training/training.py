@@ -402,7 +402,7 @@ def train(
                     recurrent = None
                 # A memory horizon is one autograd segment: detaching at a
                 # shorter sampling window would sever future action/speech
-                # supervision from WorldStateUpdate.
+                # The full memory horizon preserves supervision through C_t and SlowMemory.
                 chunk_size = config.training.memory_horizon_units
                 for chunk_start in range(unit_start, len(episode.units), chunk_size):
                     if train_state["update"] >= target_updates:
@@ -763,7 +763,9 @@ def configure_trainable_parameters(model: StreamingLatentLoop, config: ProjectCo
     head_prefixes = ("speech_head.", "action_head.")
     selective_prefixes = (
         "audio_encoder.",
-        "world_state_update.",
+        "semantic_gate",
+        "semantic_attention.",
+        "slow_memory.",
         "final_norm.",
     )
     first_top_layer = max(0, config.model.num_layers * 3 // 4)

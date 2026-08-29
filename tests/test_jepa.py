@@ -38,9 +38,7 @@ def test_behavior_and_jepa_gradients_follow_separate_predictor_paths(smoke_confi
 
     compute_losses(first, units[0])["total"].backward()
 
-    assert model.predictor.final_norm.weight.grad is None
-    assert model.prediction_adapter.projection.weight.grad is not None
-    assert model.layers[0].future_gate.weight.grad is not None
+    assert model.jepa_head.final_norm.weight.grad is None
     assert model.perceiver.queries.grad is not None
 
     model.zero_grad(set_to_none=True)
@@ -53,9 +51,9 @@ def test_behavior_and_jepa_gradients_follow_separate_predictor_paths(smoke_confi
     )
     jepa["total"].backward()
 
-    assert model.predictor.final_norm.weight.grad is not None
+    assert model.jepa_head.final_norm.weight.grad is not None
     assert model.perceiver.queries.grad is not None
-    assert model.world_state_update.gate.weight.grad is not None
+    assert model.semantic_gate.weight.grad is not None
 
 
 def test_perceiver_only_lookahead_does_not_advance_recurrent_state(smoke_config) -> None:
@@ -69,7 +67,7 @@ def test_perceiver_only_lookahead_does_not_advance_recurrent_state(smoke_config)
 
     assert target.shape == (1, 16, smoke_config.model.model_dim)
     assert returned_cache.shape == state.audio_cache.shape
-    assert torch.equal(state.latent, before.latent)
+    assert torch.equal(state.semantic_memory, before.semantic_memory)
     assert torch.equal(state.hidden, before.hidden)
     assert torch.equal(state.unit_index, before.unit_index)
     assert all(
@@ -78,13 +76,12 @@ def test_perceiver_only_lookahead_does_not_advance_recurrent_state(smoke_config)
     )
 
 
-def test_future_gate_starts_as_small_per_slot_residual(smoke_config) -> None:
+def test_slow_memory_is_fixed_capacity(smoke_config) -> None:
     model = StreamingLatentLoop(smoke_config.model)
     unit = SyntheticEpisodeDataset(smoke_config.data, smoke_config.model).make_episode(0).units[0]
 
     output = model(unit, model.initial_state(1, "cpu"))
 
-    expected = torch.sigmoid(torch.tensor(-4.0))
-    assert torch.isclose(output.future_gate_mean, expected, atol=1e-6)
-    assert torch.isclose(output.future_gate_max, expected, atol=1e-6)
-    assert all(layer.future_gate.out_features == 1 for layer in model.layers)
+    assert output.future_gate_mean.item() == 0.0
+    assert output.future_gate_max.item() == 0.0
+    assert len(output.state.slow_memory) == smoke_config.model.num_layers
