@@ -342,6 +342,14 @@ class ProjectConfig:
             self.data.dataset == "canary" and self.training.memory_horizon_units != 750
         ):
             raise ValueError("formal Canary memory horizon must be exactly 750 units")
+        if (
+            self.data.dataset == "canary"
+            and self.model.rematerialization_segment_units
+            >= self.training.memory_horizon_units
+        ):
+            raise ValueError(
+                "formal Canary rematerialization segment must be shorter than 750 units"
+            )
         if not 0 <= self.training.min_learning_rate_ratio <= 1:
             raise ValueError("min_learning_rate_ratio must be in [0, 1]")
         if not 0 <= self.training.warmup_ratio < 1:

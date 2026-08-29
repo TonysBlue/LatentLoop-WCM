@@ -98,8 +98,9 @@ scripts/run-training.sh --recipe configs/recipes/canary.yaml --run-id canary-001
 Pretrain 从随机初始化开始；SFT 自动使用 Pretrain checkpoint；Online RL 自动使用最终
 SFT checkpoint 作为 policy 和冻结 reference。
 
-三个正式 stage 使用同一条连续 episode 路径：按时间顺序处理每个 episode，持续传递 KV、
-latent、H、speech-local 和 action-local state。Canary 配置的 `tbptt_units=750` 与
+三个正式 stage 使用同一条连续 episode 路径：按时间顺序处理每个 episode，持续传递
+RecentKV、C、SlowMemory、H、speech-local 和 action-local state。Canary 配置的
+`tbptt_units=750` 与
 `memory_horizon_units=750`，确保未来输出 loss 可以回传到长期记忆更新器；smoke 只缩小该数值。
 W&B 中记录 speech mode、有效 codec 帧和 action frame 的监督密度。
 训练只使用 speech mode/codec 与 structured action frame loss；长期记忆没有独立

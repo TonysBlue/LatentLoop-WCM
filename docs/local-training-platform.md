@@ -359,17 +359,17 @@ turns.json
 
 ```text
 state = model.initial_state()
-for unit in episode chronological order:
-    output = model.forward_step(unit, state, teacher_targets)
-    losses = compute_losses(output, unit)
-    accumulate(losses)
-    state = output.state
-backward at TBPTT boundary
+for segment in chronological_horizon.split(rematerialization_segment_units):
+    light_outputs, state = checkpoint(replay_segment, segment, state)
+    accumulate(losses(light_outputs))
+backward at memory_horizon boundary
 optimizer.step()
 state = state.detach()
 ```
 
-episode 边界 reset；TBPTT 边界 detach。不能每个 unit reset 或把递归 state 移出训练进程。
+每段只保留监督所需轻量输出和一个段末完整 state；段内逐步 KV/C/H/SlowMemory 在反向时
+重算。段边界不 detach，episode 边界 reset，memory horizon 边界才 detach。不能每个 unit
+reset 或把递归 state 移出训练进程。
 
 ### 10.2 优化配置
 

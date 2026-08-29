@@ -8,7 +8,7 @@ from torch import Tensor
 from torch.nn import functional as F
 
 from model.action import action_log_prob_components
-from model.types import SpeechMode, StepOutput, StreamUnit
+from model.types import SpeechMode, StepOutput, StreamUnit, TrainingStepOutput
 
 
 def _masked_mean(values: Tensor, mask: Tensor) -> Tensor:
@@ -53,7 +53,9 @@ def compute_jepa_loss(
     return {"total": prediction + variance, "prediction": prediction, "variance": variance}
 
 
-def structured_action_loss(output: StepOutput, target: StreamUnit) -> Tensor:
+def structured_action_loss(
+    output: StepOutput | TrainingStepOutput, target: StreamUnit
+) -> Tensor:
     components = action_log_prob_components(output.action, target.action)
     supervised = target.action_supervision_mask
     losses = [_masked_mean(-components["kind"], supervised)]
@@ -72,7 +74,7 @@ def structured_action_loss(output: StepOutput, target: StreamUnit) -> Tensor:
 
 
 def compute_losses(
-    output: StepOutput,
+    output: StepOutput | TrainingStepOutput,
     target: StreamUnit,
     speech_loss_weight: float = 1.0,
     action_loss_weight: float = 1.0,

@@ -24,6 +24,8 @@ from model.types import (
     SpeechSamplingConfig,
     StepOutput,
     StreamUnit,
+    TrainingStepOutput,
+    training_output,
 )
 from model.value import ValueHead
 
@@ -34,6 +36,7 @@ __all__ = [
     "DeltaTimeEncoder",
     "GenerationOutput", "LayerKV", "RecurrentState", "SpeechLocalState", "SpeechMode",
     "SpeechSamplingConfig", "StepOutput", "StreamUnit", "StreamingLatentLoop",
+    "TrainingStepOutput", "training_output",
     "ValueHead",
     "action_frame_log_prob", "action_log_prob_components", "compute_jepa_loss", "compute_losses",
 ]

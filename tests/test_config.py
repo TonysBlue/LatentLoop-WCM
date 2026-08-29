@@ -119,6 +119,16 @@ def test_formal_canary_training_requires_cuda(monkeypatch: pytest.MonkeyPatch) -
         train(load_config("configs/stages/canary-pretrain.yaml"))
 
 
+def test_formal_canary_requires_segmented_recurrent_rematerialization() -> None:
+    config = load_config("configs/canary.yaml")
+    assert config.model.rematerialization_segment_units < config.training.memory_horizon_units
+    with pytest.raises(ValueError, match="segment must be shorter"):
+        load_config(
+            "configs/canary.yaml",
+            ["model.rematerialization_segment_units=750"],
+        )
+
+
 def test_config_rejects_incompatible_attention_width() -> None:
     with pytest.raises(ValueError, match="divisible"):
         load_config("configs/smoke.yaml", ["model.model_dim=63"])

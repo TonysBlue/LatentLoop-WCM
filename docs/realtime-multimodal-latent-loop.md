@@ -239,7 +239,8 @@ decoder 连续性。二者不是长期认知记忆，不能替代 $C_t$ 或 Slow
 
 episode/session 开始时：
 
-- $C_0$、$H_0$、SlowMemory、audio cache、speech_local、action_local 清零；
+- $C_0$ 使用 learned semantic slot identity 初始化；$H_0$、SlowMemory、audio cache、
+  speech_local、action_local 清零；
 - $\mathrm{RecentKV}_0$ 为空；
 - unit_index 从零开始。
 
@@ -614,8 +615,9 @@ $$
 
 ### 12.2 语义 memory 和 SlowMemory 读取
 
-$C_t$ 在主干指定层通过 cross-attention 读取；SlowMemory 在每层由当前 query 进行归一化
-关联读取。两者都不并入 RecentKV，只有 episode/session reset 才清零。
+$C_t$ 作为固定数量的持久 token 在主干每层与 $H_t$ 联合 self-attention；SlowMemory 在
+每层由当前 query 进行归一化关联读取。两者都不并入 RecentKV；episode/session reset 时
+$C_t$ 回到 learned 初始值，SlowMemory 清零。
 
 ### 12.3 持久化
 
@@ -809,6 +811,11 @@ Pretrain、SFT 和 Online RL 分别使用 1.0、0.5 和两路 0.1 的 JEPA 系�
 通过 C、SlowMemory 和 H 反向传播。JEPA target 侧 detach，source 侧通过 JEPAHead、H
 和监督 horizon 内历史状态传播。rematerialization 只重算激活，不截断这个 horizon；
 梯度只在明确的 horizon 边界 detach，不能在每个 unit 或重计算分段重置状态。
+
+正式训练把 750-unit horizon 划分为若干 rematerialization segment。每段前向只保留段末
+完整 recurrent state，以及各 unit 计算 Speech/Action/JEPA/PPO 所必需的轻量输出张量；
+段内逐步 H/C/RecentKV/SlowMemory 状态不进入持久输出列表，反向时从段首状态整段重放。
+segment 边界保持 autograd 连接，因此分段大小只影响显存与重算量，不改变 750-unit 监督语义。
 
 ### 16.4 外部执行边界
 

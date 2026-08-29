@@ -467,6 +467,29 @@ class StepOutput:
         )
 
 
+@dataclass(slots=True)
+class TrainingStepOutput:
+    """Per-unit differentiable outputs without a retained recurrent state."""
+
+    speech_mode_logits: Tensor
+    speech_codec_logits: Tensor
+    action: ActionHeadOutput
+    perceiver_slots: Tensor
+    jepa_prediction: Tensor
+    value: Tensor
+
+
+def training_output(output: StepOutput) -> TrainingStepOutput:
+    return TrainingStepOutput(
+        speech_mode_logits=output.speech_mode_logits,
+        speech_codec_logits=output.speech_codec_logits,
+        action=output.action,
+        perceiver_slots=output.perceiver_slots,
+        jepa_prediction=output.jepa_prediction,
+        value=output.value,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class SpeechSamplingConfig:
     temperature: float = 0.8
@@ -493,5 +516,6 @@ for _checkpoint_dataclass in (
     RecurrentState,
     ActionHeadOutput,
     StepOutput,
+    TrainingStepOutput,
 ):
     _pytree.register_dataclass(_checkpoint_dataclass)

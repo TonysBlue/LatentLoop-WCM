@@ -20,7 +20,13 @@ from contracts import ACTION_SCHEMA_ID, ObservationSignal
 from contracts.protocol import observation_to_payload
 from data import EpisodeShardReader, SyntheticEpisodeDataset
 from data.curation.readiness import check_readiness
-from model import StreamingLatentLoop, action_frame_log_prob, compute_jepa_loss, compute_losses
+from model import (
+    StreamingLatentLoop,
+    action_frame_log_prob,
+    compute_jepa_loss,
+    compute_losses,
+    training_output,
+)
 from model.types import (
     ActionFrame,
     Episode,
@@ -74,6 +80,7 @@ def _sequence_jepa_loss(
     model: StreamingLatentLoop,
     outputs: Sequence[Any],
     lookahead: StreamUnit | None,
+    lookahead_audio_cache: torch.Tensor | None = None,
 ) -> tuple[dict[str, torch.Tensor], int]:
     """Pair consecutive outputs and optionally encode one target-only successor."""
     if not outputs:
@@ -82,10 +89,9 @@ def _sequence_jepa_loss(
     sources = [output.perceiver_slots for output in outputs[:-1]]
     targets = [output.perceiver_slots for output in outputs[1:]]
     if lookahead is not None:
-        target, _ = model.encode_observation(
-            lookahead,
-            outputs[-1].state.audio_cache.clone(),
-        )
+        if lookahead_audio_cache is None:
+            raise ValueError("JEPA lookahead requires the segment-end audio cache")
+        target, _ = model.encode_observation(lookahead, lookahead_audio_cache.clone())
         predicted.append(outputs[-1].jepa_prediction)
         sources.append(outputs[-1].perceiver_slots)
         targets.append(target)
@@ -115,70 +121,34 @@ def _rematerialized_segment(
         raise ValueError("rematerialization segment must contain at least one unit")
     masks = action_masks or [unit.action_supervision_mask for unit in units]
     frames = action_frames or [unit.action for unit in units]
-    current = state
-    outputs: list[Any] = []
-    for unit, codes, action_mask, action_frame in zip(
-        units, teacher_codes, masks, frames, strict=True
-    ):
-        state_flat, state_spec = _pytree.tree_flatten(current)
-        output_spec: list[Any] = []
+    state_flat, state_spec = _pytree.tree_flatten(state)
+    result_spec: list[Any] = []
 
-        def make_run(
-            step_unit: StreamUnit,
-            step_codes: torch.Tensor | None,
-            step_action_mask: torch.Tensor,
-            step_action_frame: ActionFrame,
-            step_state_spec: Any,
-            step_output_spec: list[Any],
-        ) -> Any:
-            def run(*initial_tensors: torch.Tensor) -> tuple[torch.Tensor, ...]:
-                initial = _pytree.tree_unflatten(list(initial_tensors), step_state_spec)
-                output = model(
-                    step_unit,
-                    initial,
-                    step_codes,
-                    speech_teacher_mode=step_unit.speech_mode,
-                    action_teacher_frame=step_action_frame,
-                    action_teacher_mask=step_action_mask,
-                )
-                flat, spec = _pytree.tree_flatten(output)
-                if not step_output_spec:
-                    unique: list[torch.Tensor] = []
-                    positions: dict[int, int] = {}
-                    aliases: list[int] = []
-                    for tensor in flat:
-                        identity = id(tensor)
-                        if identity not in positions:
-                            positions[identity] = len(unique)
-                            unique.append(tensor)
-                        aliases.append(positions[identity])
-                    step_output_spec.extend((spec, aliases))
-                    return tuple(unique)
-                aliases = step_output_spec[1]
-                return tuple(flat[index] for index in _first_alias_positions(aliases))
+    def run(*initial_tensors: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        current = _pytree.tree_unflatten(list(initial_tensors), state_spec)
+        outputs: list[Any] = []
+        for unit, codes, action_mask, action_frame in zip(
+            units, teacher_codes, masks, frames, strict=True
+        ):
+            output = model(
+                unit,
+                current,
+                codes,
+                speech_teacher_mode=unit.speech_mode,
+                action_teacher_frame=action_frame,
+                action_teacher_mask=action_mask,
+            )
+            outputs.append(training_output(output))
+            current = output.state
+        flat, spec = _pytree.tree_flatten((tuple(outputs), current))
+        if not result_spec:
+            result_spec.append(spec)
+        return tuple(flat)
 
-            return run
-
-        flat_output = checkpoint(
-            make_run(unit, codes, action_mask, action_frame, state_spec, output_spec),
-            *state_flat,
-            use_reentrant=False,
-            preserve_rng_state=True,
-        )
-        output = _pytree.tree_unflatten(
-            [flat_output[index] for index in output_spec[1]], output_spec[0]
-        )
-        outputs.append(output)
-        current = output.state
-    return tuple(outputs), current
-
-
-def _first_alias_positions(aliases: Sequence[int]) -> tuple[int, ...]:
-    """Map unique tensor indices back to their first position in a flattened tree."""
-    first: dict[int, int] = {}
-    for position, unique_index in enumerate(aliases):
-        first.setdefault(unique_index, position)
-    return tuple(first[index] for index in range(len(first)))
+    flat_result = checkpoint(
+        run, *state_flat, use_reentrant=False, preserve_rng_state=True
+    )
+    return _pytree.tree_unflatten(list(flat_result), result_spec[0])
 
 
 def _aggregate_update_metrics(
@@ -575,7 +545,10 @@ def train(
                             else None
                         )
                         jepa, jepa_pairs = _sequence_jepa_loss(
-                            accelerator.unwrap_model(model), outputs, lookahead
+                            accelerator.unwrap_model(model),
+                            outputs,
+                            lookahead,
+                            recurrent.audio_cache,
                         )
                         losses = {name: value / len(moved) for name, value in chunk_losses.items()}
                         losses["jepa"] = jepa["total"]
@@ -691,7 +664,7 @@ def train(
                     pending_update_metrics = []
                     last_metrics.update(
                         {
-                            "stream/kv_tokens": float(output.state.layer_kv[0].key.shape[2]),
+                            "stream/kv_tokens": float(recurrent.layer_kv[0].key.shape[2]),
                             "data/episode": float(episode_index),
                             "data/unit": float(next_unit),
                             "train/learning_rate": float(scheduler.get_last_lr()[0]),
@@ -963,29 +936,28 @@ def _supervised_episode_objectives(
     include_jepa: bool = True,
 ) -> dict[str, torch.Tensor]:
     state = model.initial_state(1, device)
-    losses: list[torch.Tensor] = []
     outputs: list[Any] = []
     selected_units = episode.units[: config.training.memory_horizon_units]
-    for raw_unit in selected_units:
-        unit = raw_unit.to(device)
-        output = model.forward_step(
-            unit,
+    moved = [unit.to(device) for unit in selected_units]
+    segment_units = config.model.rematerialization_segment_units
+    for segment_start in range(0, len(moved), segment_units):
+        segment = moved[segment_start : segment_start + segment_units]
+        segment_outputs, state = _rematerialized_segment(
+            model,
+            segment,
             state,
-            speech_teacher_codes=unit.speech_codes,
-            speech_teacher_mode=unit.speech_mode,
-            action_teacher_frame=unit.action,
-            action_teacher_mask=unit.action_supervision_mask,
+            [unit.speech_codes for unit in segment],
         )
-        state = output.state
-        outputs.append(output)
-        losses.append(
-            compute_losses(
-                output,
-                unit,
-                config.training.speech_loss_weight,
-                config.training.action_loss_weight,
-            )["total"]
-        )
+        outputs.extend(segment_outputs)
+    losses = [
+        compute_losses(
+            output,
+            unit,
+            config.training.speech_loss_weight,
+            config.training.action_loss_weight,
+        )["total"]
+        for output, unit in zip(outputs, moved, strict=True)
+    ]
     if not losses:
         raise RuntimeError("SFT preservation episode contains no units")
     if include_jepa:
@@ -994,7 +966,7 @@ def _supervised_episode_objectives(
             if len(selected_units) < len(episode.units)
             else None
         )
-        jepa, _ = _sequence_jepa_loss(model, outputs, lookahead)
+        jepa, _ = _sequence_jepa_loss(model, outputs, lookahead, state.audio_cache)
     else:
         zero = losses[0].sum() * 0.0
         jepa = {"total": zero}
@@ -1174,6 +1146,7 @@ def _train_ppo_candidate(
             candidate,
             outputs,
             observation_to_stream_unit(lookahead_observation, config).to(device),
+            state.audio_cache,
         )
         replay_objectives = _supervised_episode_objectives(
             candidate, replay_episode, config, device

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 from data import SyntheticEpisodeDataset, write_episode_shards
-from model import StreamingLatentLoop
+from model import StreamingLatentLoop, compute_jepa_loss
 from model.losses import compute_losses
 from runtime.config import ProjectConfig
 from training import train
@@ -53,10 +53,16 @@ def test_recurrent_rematerialization_matches_direct_unroll(
         )
         direct_outputs.append(output)
         direct_state = output.state
-    direct_loss = sum(
+    direct_behavior = sum(
         compute_losses(output, unit)["total"]
         for output, unit in zip(direct_outputs, units, strict=True)
     )
+    direct_jepa = compute_jepa_loss(
+        torch.stack([output.jepa_prediction for output in direct_outputs[:-1]]),
+        torch.stack([output.perceiver_slots for output in direct_outputs[:-1]]),
+        torch.stack([output.perceiver_slots for output in direct_outputs[1:]]),
+    )["total"]
+    direct_loss = direct_behavior + direct_jepa
     direct_loss.backward()
 
     first_outputs, boundary_state = _rematerialized_segment(
@@ -72,10 +78,35 @@ def test_recurrent_rematerialization_matches_direct_unroll(
         [unit.speech_codes for unit in units[2:]],
     )
     rematerialized_outputs = first_outputs + second_outputs
-    rematerialized_loss = sum(
+    assert all(not hasattr(output, "state") for output in rematerialized_outputs)
+    assert boundary_state.layer_kv[0].key.shape[2] == (
+        len(units[:2]) * smoke_config.model.perceiver_slots
+    )
+    for direct_output, rematerialized_output in zip(
+        direct_outputs, rematerialized_outputs, strict=True
+    ):
+        assert torch.equal(
+            direct_output.speech_mode_logits, rematerialized_output.speech_mode_logits
+        )
+        assert torch.equal(
+            direct_output.speech_codec_logits, rematerialized_output.speech_codec_logits
+        )
+        assert torch.equal(
+            direct_output.action.kind_logits,
+            rematerialized_output.action.kind_logits,
+        )
+        assert torch.equal(direct_output.jepa_prediction, rematerialized_output.jepa_prediction)
+        assert torch.equal(direct_output.value, rematerialized_output.value)
+    rematerialized_behavior = sum(
         compute_losses(output, unit)["total"]
         for output, unit in zip(rematerialized_outputs, units, strict=True)
     )
+    rematerialized_jepa = compute_jepa_loss(
+        torch.stack([output.jepa_prediction for output in rematerialized_outputs[:-1]]),
+        torch.stack([output.perceiver_slots for output in rematerialized_outputs[:-1]]),
+        torch.stack([output.perceiver_slots for output in rematerialized_outputs[1:]]),
+    )["total"]
+    rematerialized_loss = rematerialized_behavior + rematerialized_jepa
     rematerialized_loss.backward()
 
     assert torch.equal(direct_state.hidden, rematerialized_state.hidden)
