@@ -4,9 +4,7 @@
 > 日期：2026-08-29
 > 关联文档：[统一三阶段训练架构](three-stage-training.md) · [统一电脑动作输出协议](unified-action.md) · [物理 Rollout 闭环](protocols/physical-rollout.md)
 
-## 1. 环境选择
-
-## 0. RL 模型结构
+## 1. RL 模型结构
 
 ```text
 ObservationSignal O_t
@@ -21,16 +19,29 @@ ObservationSignal O_t
 speech/action -> Harness -> physical environment -> O_(t+1), receipt, RewardEvent
 ```
 
-```text
-S_t = {H_t, C_t, RecentKV_t, SlowMemory_t, speech_local_t, action_local_t}
+$$
+S_t = \left\{
+H_t,C_t,\mathrm{RecentKV}_t,\mathrm{SlowMemory}_t,
+\mathrm{speech\_local}_t,\mathrm{action\_local}_t
+\right\}
+$$
 
-rho_t = exp(log pi_theta(a_t | S_t) - log pi_old(a_t | S_t))
+$$
+\rho_t = \exp\!\left(
+\log\pi_\theta(a_t\mid S_t)
+-\log\pi_{\mathrm{old}}(a_t\mid S_t)
+\right)
+$$
 
-L_RL = L_actor + c_v L_value - c_H Entropy
-     + beta KL(pi_theta || pi_SFT)
-     + lambda_jepa L_JEPA
-     + lambda_sft L_SFT_replay
-```
+$$
+\mathcal{L}_{\mathrm{RL}}
+= \mathcal{L}_{\mathrm{actor}}
+{}+c_v\mathcal{L}_{\mathrm{value}}
+{}-c_H\mathcal{H}(\pi_\theta)
+{}+\beta D_{\mathrm{KL}}(\pi_\theta\,\|\,\pi_{\mathrm{SFT}})
+{}+\lambda_{\mathrm{JEPA}}\mathcal{L}_{\mathrm{JEPA}}
+{}+\lambda_{\mathrm{SFT}}\mathcal{L}_{\mathrm{SFT\ replay}}
+$$
 
 `C_t` 不直接进入动作头，但通过 Backbone 影响 `H_t`。Reward、receipt、Judge 和任务
 成功信息只进入 Training System，不进入 `ObservationSignal`。PPO candidate 在 750-unit
@@ -38,6 +49,8 @@ recurrent window 上重放完整状态，更新 Encoder、Perceiver、Backbone�
 SlowMemory write controller 及输出头；通过 finite、reference-KL 和 SFT preservation
 门禁后才在 unit 边界原子切换。checkpoint 必须保存 `H/C/RecentKV/SlowMemory` 及
 冻结 reference 的对应状态。
+
+## 2. 环境选择
 
 Canary 是当前唯一正式规模，使用真实隔离电脑环境。正式 Online RL 当前唯一允许的算法是
 Online Recurrent PPO。它使用一个生命期
@@ -47,7 +60,7 @@ session 的连续物理时间线；任务完成不会重置模型或环境。只
 进程内 deterministic environment 只用于单元测试协议和梯度，不允许被正式配置选择，
 也不能在真实环境连接失败时自动回退。
 
-## 2. 环境协议
+## 3. 环境协议
 
 Harness control client 提供以下语义：
 
@@ -79,7 +92,7 @@ screen[3,224,224]
 `terminated` 只表示 episode 是否结束，不透露成功原因。task success、评分器内部状态、
 权限判断和隐藏 UI 元数据只能进入训练侧 receipt/reward 记录，不能拼进下一 unit 输入。
 
-## 3. 连续时间线与 Reward Event
+## 4. 连续时间线与 Reward Event
 
 训练时间线只保存 canonical `ObservationSignal` protobuf bytes 及 hash chain。冻结的
 Reward Judge 只能读取这份字节流，不能读取 action、receipt、DOM、隐藏 task 字段或
@@ -109,15 +122,15 @@ $$
 正式 rubric 固定为 `configs/reward/perceptual-v1.yaml`，其内容 SHA-256 与冻结 Judge 的
 model ID/revision 一起写入配置和 checkpoint；`unconfigured` 或 hash 不匹配时拒绝启动。
 
-## 4. PPO 窗口
+## 5. PPO 窗口
 
 当前 serving policy 在固定窗口内连续运行并记录 recurrent state、sampled action、old
 log-prob、value 和 policy version。窗口只有在 reward finalization watermark 覆盖可归因
 事件且没有 infrastructure failure 时封存。旧 policy 继续服务，候选 policy 后台训练；
 候选通过验证后在 80 ms unit 边界原子切换。切换只原子替换模型参数和 optimizer
-状态；serving policy 在该边界已经形成的完整 recurrent state（包括 Z/H/KV、audio cache、
+状态；serving policy 在该边界已经形成的完整 recurrent state（包括 C/H/RecentKV/SlowMemory、audio cache、
 Speech/Action local state 和 unit cursor）原样继承给新参数，不能 reset，也不能用有限观察
-历史反事实重算。有限历史无法恢复早期时间线累积进 Z/H 的长期信息，并可能破坏尚未释放的
+历史反事实重算。有限历史无法恢复早期时间线累积进 C/H/SlowMemory 的长期信息，并可能破坏尚未释放的
 按键或未完成 UTF-8 等执行状态。
 
 后台训练不得阻塞物理时间线。reward 等待和 candidate optimizer 运行期间，serving policy
@@ -143,14 +156,14 @@ manifest 临时抽两条样本，也不得让 preservation 样本参与 optimize
 source 的 JEPA-only lookahead。sealed metadata 记录其 unit index 和 payload SHA-256。
 lookahead 不进入 PPO unit count、reward、advantage、old/reference log-prob 或 ratio；candidate
 从 window start state 重放到 O_end 后，仅用其 audio cache 副本执行 Perceiver target 编码，
-不推进 Z/H/KV。该 observation 后续仍按正常生命期顺序被 serving policy 消费，不能额外执行
+不推进 C/H/RecentKV/SlowMemory。该 observation 后续仍按正常生命期顺序被 serving policy 消费，不能额外执行
 一次环境 action。
 
 每个 PPO epoch 同时计算两路 JEPA：sealed on-policy 连续 observation 学习当前物理交互，
 SFT replay 连续 episode 稳定通用表示。两路都使用 candidate 内唯一一份 Perceiver 参数，
 分别加权和记录；preservation manifest 只做行为门禁，不参与 JEPA 训练。
 
-## 5. Recurrent PPO 数学目标
+## 6. Recurrent PPO 数学目标
 
 使用时间折扣和 GAE：
 
@@ -217,7 +230,7 @@ stop-gradient。PPO 不再采样同一初始状态的 rollout group，也不使�
 sampled KL 的 log-ratio 在进入指数前按协议上限截断，以避免极小概率 token 造成数值溢出；
 这项数值边界必须在指标中与 candidate 的未截断身份和配置一起审计。
 
-## 6. 在线性与安全边界
+## 7. 在线性与安全边界
 
 - rollout 必须由当前 policy 在线产生，训练不得从静态文件冒充 on-policy 数据；
 - policy update 后未消费的旧 rollout 必须丢弃；
@@ -227,7 +240,7 @@ sampled KL 的 log-ratio 在进入指数前按协议上限截断，以避免极�
 - 环境 socket 和 snapshot 位于仓库外，连接失败必须 fail closed；
 - policy、reference、session manifest、Judge、环境和 reward spec identity 全部进入 checkpoint。
 
-## 7. Checkpoint 与同一生命期恢复
+## 8. Checkpoint 与同一生命期恢复
 
 checkpoint 保存 serving policy/optimizer、policy 与冻结 reference 的完整 recurrent state、
 下一个 observation unit cursor、policy version、active goal tracker、reward watermark、timeline
@@ -241,7 +254,7 @@ SFT checkpoint 必须逐键覆盖包含 Value Head 的当前完整模型；repla
 达到正式训练预算后显式 close lifetime session；因 `stop_after_updates` 暂停时只断开训练
 client，保留 Harness、环境与 codec session 供同一 checkpoint 恢复。
 
-## 8. Canary 本机规模参数
+## 9. Canary 本机规模参数
 
 Canary 的 window 固定为 750 units，正式语义是一个智能体、一个 active lifetime session、
 一条连续时间线。本机验证记录窗口封存/丢弃数、candidate 接纳/拒绝、finalization lag、
@@ -249,7 +262,7 @@ reward、吞吐和峰值显存。多环境并行代表多个智能体/生命期�
 不能作为吞吐优化暗中引入。后续规模不得通过复制 RL 循环实现；必须基于 Canary 证据重新
 设计窗口数、更新预算和资源规格，并先刷新架构与测试契约。
 
-## 9. 测试契约
+## 10. 测试契约
 
 - 延迟 Reward Event 必须回填到其 `outcome_unit`，watermark 未覆盖时继续服务且超限失败；
 - candidate 训练期间至少有旧 policy 单元继续进入 timeline，且 stale window 永不参与更新；
@@ -259,6 +272,7 @@ reward、吞吐和峰值显存。多环境并行代表多个智能体/生命期�
 - Harness session 不存在、cursor 错位、timeline 被修改或 reference checkpoint hash 不符时拒绝恢复。
 - window lookahead 必须严格为 `end_unit+1` 且 payload hash 匹配；它不得改变 PPO 样本数、
   reward、advantage 或 ratio；
-- on-policy/replay JEPA 分别产生有限 loss 和 Predictor 梯度，preservation episode 不得进入
+- on-policy/replay JEPA 分别产生有限 loss 和 JEPAHead 梯度，preservation episode 不得进入
   optimizer；
-- 行为/RL 梯度在 predicted slots 后停止但继续训练 Future Adapter/Gate，JEPA target 侧无梯度。
+- 行为/RL loss 不进入 JEPAHead；JEPA target 侧无梯度，source 侧训练 JEPAHead、Backbone、
+  Perceiver 和编码器。

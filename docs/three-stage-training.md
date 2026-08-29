@@ -54,10 +54,9 @@ $$
 $$
 
 各项只在自己的有效 mask 上归一化。Speech Head、Unified Action Head、Perceiver、
-Predictor、PredictionAdapter/Future Gate、Backbone 和 WorldStateUpdate 全部按各自梯度路径
-更新。WorldStateUpdate 没有独立 memory target；未来 speech/action loss 通过
-`Z_t -> Backbone -> H_t -> heads` 反向监督记忆更新，JEPA source loss 另外通过 Predictor
-监督 Perceiver 和 WorldStateUpdate。
+JEPAHead、Backbone、语义 memory slots 和 SlowMemory updater 全部按各自梯度路径更新。
+记忆没有独立 target；未来 speech/action loss 通过 $C_t$ 和 SlowMemory 反向监督记忆更新，
+JEPA source loss 通过 JEPAHead 监督 Perceiver、Backbone 和语义状态。
 
 ## 4. SFT
 
@@ -94,7 +93,7 @@ P_{t+1} = \mathrm{Perceiver}(O_{t+1}; \theta_k)
 $$
 
 $$
-\widehat{P}_{t+1\mid t} = \mathrm{Predictor}(P_t, Z_t)
+\widehat{P}_{t+1\mid t} = \mathrm{JEPAHead}(H_t,C_t)
 $$
 
 $$
@@ -110,7 +109,7 @@ $$
 可微 source 接受行为和 JEPA 梯度。
 
 监督 chunk 最后一项使用 Perceiver-only lookahead 编码下一 observation 和 audio cache 副本，
-不更新 Z/H/KV，丢弃返回 cache。episode 最后一项没有 successor 时不形成 pair。
+不更新 C/H/RecentKV/SlowMemory，丢弃返回 cache。episode 最后一项没有 successor 时不形成 pair。
 
 配置不使用重复的 `training.objective`。`training.stage` 唯一决定三阶段分派；
 仅当 `stage=rl` 时，`training.rl.algorithm=online_recurrent_ppo` 决定具体 RL 更新规则。
@@ -205,8 +204,8 @@ supervision density、评测 episode/speech-frame 数、elapsed time、units/s�
 - time-discount GAE、PPO clipping、Value、KL、窗口封存和全模型梯度可验证；
 - JEPA target detach、同参数版本、方差下界、chunk lookahead 不改变 recurrent state 可验证；
 - PPO on-policy/replay JEPA 分别加权记录，lookahead 不进入 reward、ratio 或 PPO unit count；
-- 行为 loss 在 Predictor 前 stop-gradient，但能训练 Adapter/Gate；JEPA loss 能训练 Predictor、
-  source Perceiver 和 WorldStateUpdate；
+- 行为 loss 不进入 JEPAHead；JEPA loss 能训练 JEPAHead、source Perceiver、Backbone 和
+  语义 memory 更新路径；
 - 后台 candidate 期间旧 policy 持续服务，stale 窗口隔离，有限性/KL/SFT 保真门禁拒绝时
   serving policy 不变；
 - resume 校验完整谱系和当前模型状态，并拒绝不完整 checkpoint；
