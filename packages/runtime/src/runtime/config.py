@@ -10,21 +10,18 @@ from omegaconf import OmegaConf
 
 @dataclass(slots=True)
 class ModelConfig:
-    architecture_id: str = "latentloop-perceiver-jepa-memory-v2"
+    architecture_id: str = "latentloop-perceiver-jepa-memory-v3"
     model_dim: int = 256
-    latent_dim: int = 256
     num_layers: int = 4
     num_heads: int = 8
     ffn_dim: int = 1024
-    cross_attention_every: int = 2
     audio_tokens: int = 4
     audio_kernel: int = 400
     audio_stride: int = 160
     vision_tokens: int = 16
     perceiver_slots: int = 16
     perceiver_layers: int = 2
-    predictor_layers: int = 2
-    latent_slots: int = 8
+    jepa_layers: int = 2
     semantic_memory_slots: int = 8
     slow_memory_type: str = "gated_delta"
     rematerialization_segment_units: int = 32
@@ -188,21 +185,21 @@ class ProjectConfig:
             raise ValueError("model_dim must be divisible by num_heads")
         if self.model.audio_kernel < self.model.audio_stride:
             raise ValueError("audio_kernel must be >= audio_stride")
-        if self.model.kv_units < 1 or self.model.latent_slots < 1:
-            raise ValueError("kv_units and latent_slots must be positive")
+        if self.model.kv_units < 1 or self.model.semantic_memory_slots < 1:
+            raise ValueError("kv_units and semantic_memory_slots must be positive")
         expected_kv_units = -(-self.model.kv_window_ms // self.data.unit_ms)
         if self.model.kv_units != expected_kv_units:
             raise ValueError("KV must exactly cover kv_window_ms at the configured unit_ms")
-        if self.model.architecture_id != "latentloop-perceiver-jepa-memory-v2":
-            raise ValueError("model.architecture_id must be latentloop-perceiver-jepa-memory-v2")
+        if self.model.architecture_id != "latentloop-perceiver-jepa-memory-v3":
+            raise ValueError("model.architecture_id must be latentloop-perceiver-jepa-memory-v3")
         if self.model.vision_tokens != 16:
             raise ValueError("vision_tokens must be 16")
         if (
             self.model.perceiver_slots != 16
             or self.model.perceiver_layers != 2
-            or self.model.predictor_layers != 2
+            or self.model.jepa_layers != 2
         ):
-            raise ValueError("Perceiver/Predictor topology must be 16 slots and 2/2 layers")
+            raise ValueError("Perceiver/JEPA topology must be 16 slots and 2/2 layers")
         if self.model.slow_memory_type != "gated_delta":
             raise ValueError("slow_memory_type must be gated_delta")
         if self.model.semantic_memory_slots < 1:

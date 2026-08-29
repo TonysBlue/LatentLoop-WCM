@@ -37,6 +37,7 @@ def test_public_smoke_recipe_runs_all_three_stages(tmp_path: Path) -> None:
         f"training.rl.session_manifest={session_manifest}",
         "tracking.enabled=false",
         "tracking.mode=disabled",
+        "model.rematerialization_segment_units=2",
     ]
     rl_config = load_config("configs/stages/smoke-rl.yaml", overrides)
     identity = CodecIdentity(
@@ -123,3 +124,5 @@ def test_public_smoke_recipe_runs_all_three_stages(tmp_path: Path) -> None:
     assert report["stages"][-1]["train"]["metrics"]["rl/finalization_lag_units"] >= 0
     assert report["stages"][-1]["train"]["metrics"]["runtime/elapsed_seconds"] > 0
     assert report["stages"][-1]["train"]["metrics"]["runtime/units_per_second"] > 0
+    assert rl_config.model.rematerialization_segment_units == 2
+    assert rl_config.training.rl.ppo_window_units > 2

@@ -142,7 +142,7 @@ Do not silently change these invariants:
 - Context: the formal Canary profile retains 60 seconds (`750` units) of bounded
   per-layer KV state. KV is bounded and oldest context is evicted according to
   the model implementation; do not introduce unbounded cache growth.
-- State: recurrent KV, latent slots, audio cache, and speech-local state are
+- State: recurrent KV, semantic memory slots, per-layer SlowMemory, audio cache, and speech-local state are
   carried across TBPTT chunks within an episode and detached between chunks.
   State resets at episode/session boundaries, not at every sampling window.
 - Inputs: training examples use the single mixed microphone signal plus screen
@@ -152,8 +152,8 @@ Do not silently change these invariants:
   adapter only; it is not a second runtime speech target. Actions remain an
   independent action head.
 - Long-term memory has no independent target or auxiliary write loss. It is
-  trained only through future Speech/Action output losses flowing through
-  `Z_t -> Backbone -> H_t -> heads`.
+  trained through future Speech/Action losses flowing from heads through
+  `H_t -> Backbone -> C_t/SlowMemory`, while JEPA supervises prediction from `H_t`.
 - Do not reintroduce balanced-window training or per-window state reset. If
   speech supervision is sparse, fix the dataset composition and report the
   resulting supervision density.

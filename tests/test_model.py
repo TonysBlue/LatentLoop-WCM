@@ -27,19 +27,19 @@ def test_recurrent_state_is_bounded_and_heads_receive_gradients(
     assert all(cache.key.shape[2] == max_tokens for cache in state.layer_kv)
     assert state.semantic_memory.shape == (
         1,
-        smoke_config.model.latent_slots,
+        smoke_config.model.semantic_memory_slots,
         smoke_config.model.model_dim,
     )
     total.backward()
     assert model.audio_encoder.conv.weight.grad is not None
     assert model.vision_encoder.encoder[0].weight.grad is not None
-    assert model.semantic_gate.weight.grad is not None
-    assert model.slow_memory.write_gate.weight.grad is not None
+    assert model.semantic_slot_identity.grad is not None
+    assert model.slow_memories[0].write_gate.weight.grad is not None
     assert model.speech_head.depth_embeddings[0].weight.grad is not None
     assert model.action_head.kind_output.weight.grad is not None
     assert model.speech_head.mode.weight.grad is not None
     assert output.perceiver_slots.shape == (1, 16, smoke_config.model.model_dim)
-    assert output.predicted_next_slots.shape == output.perceiver_slots.shape
+    assert output.jepa_prediction.shape == output.perceiver_slots.shape
     assert output.value.shape == (1,)
 
 
@@ -51,6 +51,23 @@ def test_training_value_head_receives_policy_value_gradient(smoke_config: Projec
     output.value.square().mean().backward()
 
     assert model.value_head.network[-1].weight.grad is not None
+
+
+def test_semantic_slots_are_backbone_state_but_not_recent_kv(smoke_config: ProjectConfig) -> None:
+    model = StreamingLatentLoop(smoke_config.model).eval()
+    unit = SyntheticEpisodeDataset(smoke_config.data, smoke_config.model).make_episode(0).units[0]
+    initial = model.initial_state(1, "cpu")
+    altered = initial.detach()
+    altered.semantic_memory = altered.semantic_memory + 1.0
+
+    with torch.no_grad():
+        baseline = model(unit, initial, unit.speech_codes)
+        changed = model(unit, altered, unit.speech_codes)
+
+    assert not torch.equal(baseline.hidden, changed.hidden)
+    expected_cached = smoke_config.model.perceiver_slots
+    assert all(cache.key.shape[2] == expected_cached for cache in baseline.state.layer_kv)
+    assert torch.equal(initial.semantic_memory[0], model.semantic_slot_identity)
 
 
 def test_detach_breaks_tbptt_graph(smoke_config: ProjectConfig) -> None:

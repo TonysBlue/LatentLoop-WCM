@@ -72,6 +72,7 @@ class CachedSelfAttention(nn.Module):
         x: Tensor,
         cache: LayerKV,
         max_tokens: int,
+        cache_tokens: int,
     ) -> tuple[Tensor, LayerKV, LayerKV]:
         batch, current_tokens, dim = x.shape
         qkv = self.qkv(x).view(batch, current_tokens, 3, self.heads, self.head_dim)
@@ -80,15 +81,19 @@ class CachedSelfAttention(nn.Module):
         key = key.transpose(1, 2)
         value = value.transpose(1, 2)
 
-        all_key = torch.cat((cache.key, key), dim=2)
-        all_value = torch.cat((cache.value, value), dim=2)
-        scores = torch.matmul(query, all_key.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        attention_key = torch.cat((cache.key, key), dim=2)
+        attention_value = torch.cat((cache.value, value), dim=2)
+        scores = torch.matmul(query, attention_key.transpose(-2, -1)) / math.sqrt(self.head_dim)
         weights = torch.softmax(scores.float(), dim=-1).to(scores.dtype)
         weights = torch.dropout(weights, self.dropout, self.training)
         output = (
-            torch.matmul(weights, all_value).transpose(1, 2).reshape(batch, current_tokens, dim)
+            torch.matmul(weights, attention_value)
+            .transpose(1, 2)
+            .reshape(batch, current_tokens, dim)
         )
 
+        all_key = torch.cat((cache.key, key[:, :, :cache_tokens]), dim=2)
+        all_value = torch.cat((cache.value, value[:, :, :cache_tokens]), dim=2)
         new_cache = LayerKV(
             key=all_key[:, :, -max_tokens:],
             value=all_value[:, :, -max_tokens:],
@@ -101,17 +106,11 @@ class CachedSelfAttention(nn.Module):
 
 class StreamingTransformerLayer(nn.Module):
     def __init__(
-        self, dim: int, heads: int, ffn_dim: int, dropout: float, cross_world: bool
+        self, dim: int, heads: int, ffn_dim: int, dropout: float
     ) -> None:
         super().__init__()
         self.self_norm = nn.LayerNorm(dim)
         self.self_attention = CachedSelfAttention(dim, heads, dropout)
-        self.world_norm = nn.LayerNorm(dim) if cross_world else None
-        self.world_attention = (
-            nn.MultiheadAttention(dim, heads, dropout=dropout, batch_first=True)
-            if cross_world
-            else None
-        )
         self.ffn_norm = nn.LayerNorm(dim)
         self.ffn = nn.Sequential(
             nn.Linear(dim, ffn_dim),
@@ -126,28 +125,18 @@ class StreamingTransformerLayer(nn.Module):
         hidden: Tensor,
         cache: LayerKV,
         max_tokens: int,
+        cache_tokens: int,
         slow_memory: SlowMemory,
         slow_state: SlowMemoryState,
-        semantic_memory: Tensor,
-    ) -> tuple[Tensor, LayerKV, SlowMemoryState, Tensor]:
+    ) -> tuple[Tensor, LayerKV, SlowMemoryState]:
         attended, new_cache, evicted = self.self_attention(
             self.self_norm(hidden),
             cache,
             max_tokens,
+            cache_tokens,
         )
-        slow_context = slow_memory.read(self.self_norm(hidden), slow_state).mean(dim=1)
+        slow_context = slow_memory.read(self.self_norm(hidden), slow_state)
         attended = attended + slow_context
         hidden = hidden + self.dropout(attended)
-        if self.world_attention is not None and self.world_norm is not None:
-            normalized = self.world_norm(hidden)
-            crossed, _ = self.world_attention(
-                normalized, semantic_memory, semantic_memory, need_weights=False
-            )
-            hidden = hidden + self.dropout(crossed)
         hidden = hidden + self.dropout(self.ffn(self.ffn_norm(hidden)))
-        return (
-            hidden,
-            new_cache,
-            slow_memory.write(slow_state, evicted),
-            torch.zeros_like(hidden[..., :1]),
-        )
+        return hidden, new_cache, slow_memory.write(slow_state, evicted)

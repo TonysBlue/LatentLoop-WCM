@@ -25,7 +25,7 @@ expired KV -> MemoryUpdater -> SlowMemory_t
 ```
 
 $$
-\widehat{P}_{t+1\mid t} = \mathrm{JEPAHead}(H_t, C_t)
+\widehat{P}_{t+1\mid t} = \mathrm{JEPAHead}(H_t)
 $$
 
 $$
@@ -88,7 +88,7 @@ U_t = \left(
 $$
 
 $$
-\widehat{P}_{t+1\mid t} = \mathrm{JEPAHead}(H_t,C_t)
+\widehat{P}_{t+1\mid t} = \mathrm{JEPAHead}(H_t)
 $$
 
 $$
@@ -107,12 +107,12 @@ H_t 是主干当前工作 token，C_t 是持久语义 slots；环境结果只通
 5. 将所有电脑操控统一到一个结构化 ActionFrame schema 与联合概率接口。
 6. 使用固定容量 $C_t$ 保存共享语义状态，并用每层 SlowMemory 保存长期关联摘要。
 7. 使用有界 KV 保存近期精确多模态历史，控制显存和延迟。
-8. 让未来 Speech/Action/JEPA loss 通过 $C_t$ 和 SlowMemory 监督早期记忆更新。
+8. 让未来 Speech/Action loss 与跨 unit 的 JEPA source 梯度通过 $C_t$ 和 SlowMemory 监督早期记忆更新。
 9. 训练、验证、checkpoint 恢复和推理使用同一状态转移。
 10. 由 Harness 提供动作语法、安全和权限校验。
 11. Pretrain、SFT、Online RL（算法为 Online Recurrent PPO）使用同一双头模型和状态转移完整训练全模型；
     RL Value Head 仅用于 actor-critic 估值，不跨物理信号边界。
-12. 使用单参数 Perceiver 和 JEPA 单步目标，使 $H_t/C_t$ 学习可预测的观测表示。
+12. 使用单参数 Perceiver 和 JEPA 单步目标，使 $H_t$ 学习可预测的观测表示，并经递归影响 $C_t$。
 
 ## 3. 输入与输出
 
@@ -362,17 +362,16 @@ P_t,H_{t-1},C_{t-1},
 \right)
 $$
 
-同一 unit 的 16 个 slots 双向互见，只能读取历史 unit 的 KV。每层依次执行 cached
-self-attention、SlowMemory read、指定层的 semantic-memory cross-attention、feed-forward
-和 normalization。$C_{t-1}$ 通过 cross-attention 影响 $H_t$，但不作为普通 KV token。
+每层把当前工作 tokens 与持久语义 tokens 拼成 $[H,C]$，共同执行 cached self-attention、
+SlowMemory read 和 feed-forward，因此同一 unit 的 H/C 双向互见。只有 H 写入
+RecentKV；固定数量的 C 只跨 unit 持久化，不写入 RecentKV。
 
 ### 6.4 JEPAHead 与单参数 JEPA
 
-JEPAHead 读取当前 $H_t$ 和更新后的 $C_t$，以固定 slot 顺序预测一个 80 ms 后的
-Perceiver 表示：
+JEPAHead 只读取当前 $H_t$，以固定 slot 顺序预测一个 80 ms 后的 Perceiver 表示：
 
 $$
-\widehat{P}_{t+1\mid t} = \mathrm{JEPAHead}(H_t,C_t)
+\widehat{P}_{t+1\mid t} = \mathrm{JEPAHead}(H_t)
 $$
 
 Perceiver 只有一份参数，不维护 EMA teacher。预测输出只参与 JEPA loss，不再作为 Future
@@ -382,38 +381,33 @@ slots 回注行为主干，因此 Speech/Action/Value loss 不训练 JEPAHead。
 
 ### 7.1 严格更新顺序
 
-当前观测、上一工作状态和上一语义状态共同进入 Backbone：
+语义 slots 以学习到的槽位身份初始化：
 
 $$
-C_t = \mathcal{U}_{\theta}\!\left(C_{t-1},H_t\right)
+C_0 = E_C
 $$
 
-$C_t$ 是 Backbone 内专门划出的持久语义区域；$H_t$ 服务当前输出，$C_t$ 保存到下一
-unit。二者使用同一 model dimension，但生命周期和职责不同。
-
-### 7.2 候选与门控
-
-语义 slots 的内部参数化为：
+随后当前观测、上一工作状态和上一语义状态共同进入每一层 Backbone：
 
 $$
-Q_t = C_{t-1} + I_{\mathrm{slot}}
+X_t^{(0)} = \left[P_t+H_{t-1},C_{t-1}\right]
 $$
 
 $$
-R_t = \mathrm{Attention}(Q_t,H_t,H_t)
+X_t^{(l+1)} = \mathrm{BackboneLayer}^{(l)}\!\left(
+X_t^{(l)},\mathrm{RecentKV}_{t-1}^{(l)},\mathrm{SlowMemory}_{t-1}^{(l)}
+\right)
 $$
 
 $$
-G_t = \sigma\!\left(W_g[Q_t,R_t]+b_g\right)
+(H_t,C_t)=\mathrm{split}\!\left(\mathrm{Norm}(X_t^{(L)})\right)
 $$
 
-$$
-C_t = C_{t-1}+G_t\odot\left(R_t-C_{t-1}\right)
-$$
+$C_t$ 是 Backbone token 序列中专门划出的持久语义区域；$H_t$ 服务当前输出，$C_t$
+保存到下一 unit。$E_C$ 只在 session 初始化时使用，不在每个 unit 重复相加。二者使用
+同一 model dimension，但生命周期和职责不同；不存在 Backbone 外的独立更新网络。
 
-learned slot identity 只打破零初始化 slots 的对称性，不规定 slot 语义。
-
-### 7.3 SlowMemory 写入、覆盖和遗忘
+### 7.2 SlowMemory 写入、覆盖和遗忘
 
 令从 RecentKV 淘汰的第 $l$ 层 KV 为 $(K_t^{(l)},V_t^{(l)})$：
 
@@ -451,7 +445,7 @@ $$
 
 Delta 写入用预测误差修正旧关联，门控决定写入强度，$\rho_t^{(l)}$ 提供有界遗忘。
 
-### 7.4 长时监督
+### 7.3 长时监督
 
 未来输出 loss 沿以下路径反向传播：
 
@@ -559,14 +553,10 @@ P_t = \mathrm{Perceiver}(O_t)
 $$
 
 $$
-\widehat{P}_{t+1\mid t} = \mathrm{JEPAHead}(H_t,C_t)
+\widehat{P}_{t+1\mid t} = \mathrm{JEPAHead}(H_t)
 $$
 
 ### 11.2 记忆
-
-$$
-C_t = \mathrm{SemanticMemoryUpdate}(C_{t-1},H_t)
-$$
 
 $$
 \mathrm{SlowMemory}_t
@@ -816,8 +806,9 @@ Pretrain、SFT 和 Online RL 分别使用 1.0、0.5 和两路 0.1 的 JEPA 系�
 ### 16.3 梯度路径
 
 单个 unit 的输出 loss 通过当前 Backbone 和 Perceiver 反向传播；跨 unit 的未来行为 loss
-通过 C、SlowMemory 和 H 反向传播。JEPA target 侧 detach，source 侧可通过 JEPAHead、C
-和 TBPTT 内历史状态传播。TBPTT 只在配置边界 detach，不能在每个 unit 重置状态。
+通过 C、SlowMemory 和 H 反向传播。JEPA target 侧 detach，source 侧通过 JEPAHead、H
+和监督 horizon 内历史状态传播。rematerialization 只重算激活，不截断这个 horizon；
+梯度只在明确的 horizon 边界 detach，不能在每个 unit 或重计算分段重置状态。
 
 ### 16.4 外部执行边界
 
@@ -843,7 +834,7 @@ for each 80 ms observation O_t:
     H_t, C_t, RecentKV_t, SlowMemory_t = Backbone(
         P_t, state.H, state.C, state.RecentKV, state.SlowMemory
     )
-    P_hat = JEPAHead(H_t, C_t)
+    P_hat = JEPAHead(H_t)
     speech_t = SpeechHead(H_t, state.speech_local)
     action_t = ActionHead(H_t, state.action_local)
 
@@ -882,8 +873,8 @@ MiniCPM 或同类多模态主干可以提供视觉编码、音频编码、Percei
 
 目标配置必须明确：
 
-- model_dim、latent_dim、层数、heads 和 FFN；
-- latent_slots、kv_units、kv_window_ms；
+- model_dim、层数、heads 和 FFN；
+- perceiver_slots、semantic_memory_slots、kv_units、kv_window_ms；
 - audio sample rate、unit_ms、screen shape；
 - Mimi codec identity；
 - action_schema_id、coordinate_grid_size、type_bytes_per_unit、hotkey_keys_per_unit；
@@ -1001,7 +992,7 @@ mixed microphone + screen + time
     -> Perceiver(O_t) = P_t
     -> H_t, C_t, RecentKV_t, SlowMemory_t
        = Backbone(P_t, H_(t-1), C_(t-1), RecentKV_(t-1), SlowMemory_(t-1))
-    -> JEPAHead(H_t, C_t) = P_hat_(t+1|t)
+    -> JEPAHead(H_t) = P_hat_(t+1|t)
     -> SpeechHead(H_t) + UnifiedActionHead(H_t)
     -> frozen Mimi decode / Harness execution
     -> real acoustic and visual feedback

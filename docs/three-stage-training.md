@@ -56,7 +56,8 @@ $$
 各项只在自己的有效 mask 上归一化。Speech Head、Unified Action Head、Perceiver、
 JEPAHead、Backbone、语义 memory slots 和 SlowMemory updater 全部按各自梯度路径更新。
 记忆没有独立 target；未来 speech/action loss 通过 $C_t$ 和 SlowMemory 反向监督记忆更新，
-JEPA source loss 通过 JEPAHead 监督 Perceiver、Backbone 和语义状态。
+JEPA source loss 通过 JEPAHead 与 $H_t$ 监督 Perceiver 和 Backbone；跨 unit 时可继续沿
+Backbone recurrence 监督更早的语义状态。
 
 ## 4. SFT
 
@@ -93,7 +94,7 @@ P_{t+1} = \mathrm{Perceiver}(O_{t+1}; \theta_k)
 $$
 
 $$
-\widehat{P}_{t+1\mid t} = \mathrm{JEPAHead}(H_t,C_t)
+\widehat{P}_{t+1\mid t} = \mathrm{JEPAHead}(H_t)
 $$
 
 $$
@@ -130,7 +131,7 @@ environment_id
 environment_version
 protocol_version
 action_schema_id = structured-action-v1
-architecture_id = latentloop-perceiver-jepa-v1
+architecture_id = latentloop-perceiver-jepa-memory-v3
 runtime_identity
 decoded_controls
 receipts

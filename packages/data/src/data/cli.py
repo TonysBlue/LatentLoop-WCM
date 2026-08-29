@@ -155,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
                 "tokens_per_unit": config.model.tokens_per_unit,
                 "perceiver_slots": config.model.perceiver_slots,
                 "perceiver_layers": config.model.perceiver_layers,
-                "predictor_layers": config.model.predictor_layers,
+                "jepa_layers": config.model.jepa_layers,
                 "max_kv_tokens": config.model.kv_units * config.model.perceiver_slots,
             }
         elif args.command == "generate-data":

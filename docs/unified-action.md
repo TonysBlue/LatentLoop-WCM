@@ -17,20 +17,11 @@ P_t = \mathrm{Perceiver}(O_t)
 $$
 
 $$
-Z_t = \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1})
-$$
-
-$$
-\widehat{P}_{t+1\mid t} = \mathrm{Predictor}(P_t, Z_t)
-$$
-
-$$
-F_t = \mathrm{PredictionAdapter}\!\left(\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})\right) + E_{\mathrm{future}}
-$$
-
-$$
-(H_t, \mathrm{KV}_t) = \mathrm{Backbone}
-\left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right)
+\left(H_t,C_t,\mathrm{RecentKV}_t,\mathrm{SlowMemory}_t\right)
+= \mathrm{Backbone}\!\left(
+P_t,H_{t-1},C_{t-1},
+\mathrm{RecentKV}_{t-1},\mathrm{SlowMemory}_{t-1}
+\right)
 $$
 
 $$
@@ -330,9 +321,9 @@ $$
 {}+ w_{\mathrm{JEPA}}^{(\mathrm{stage})}\mathcal{L}_{\mathrm{JEPA}}
 $$
 
-Action loss 通过 Action Head、Backbone、Perceiver、Future Adapter/Gate 和
-WorldStateUpdate 训练行为路径；它在 predicted slots 处 stop-gradient，不训练 Predictor。
-Predictor 由 JEPA loss 训练。没有额外 action-control、confidence、success、memory 或
+Action loss 通过 Action Head、Backbone、Perceiver、语义 slots 和 SlowMemory 训练行为路径；
+它不训练独立的 JEPA Head。JEPA Head 由 target stop-gradient 的 JEPA loss 训练。
+没有额外 action-control、confidence、success、memory 或
 rollback loss。
 
 ## 9. 推理与 Harness 安全边界
@@ -368,8 +359,7 @@ identity。恢复后下一 frame 的 logits、采样和 UTF-8 assembler 状态�
 - action frame joint log-prob 与监督 NLL 使用相同分解；
 - action 监督全 false 时 loss 有限且无虚假梯度；
 - checkpoint 中断恢复、TBPTT detach 和 session reset；
-- Action loss 到达 Action Head、Backbone、Perceiver、Future Adapter/Gate 和
-  WorldStateUpdate，但不到达 Predictor；
+- Action loss 到达 Action Head、Backbone、Perceiver、C 和 SlowMemory，但不到达 JEPA Head；
 - learned state/spatial queries 对任意 slot 排列都保持 shape 和概率接口，不依赖旧
   `STATE_QUERY`/`VISION_*` 位置。
 

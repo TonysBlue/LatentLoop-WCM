@@ -5,10 +5,10 @@ from runtime.config import load_config
 
 
 def test_load_config_with_override() -> None:
-    config = load_config("configs/smoke.yaml", ["model.latent_slots=6"])
-    assert config.model.latent_slots == 6
+    config = load_config("configs/smoke.yaml", ["model.semantic_memory_slots=6"])
+    assert config.model.semantic_memory_slots == 6
     assert config.model.tokens_per_unit == config.model.perceiver_slots == 16
-    assert config.model.perceiver_layers == config.model.predictor_layers == 2
+    assert config.model.perceiver_layers == config.model.jepa_layers == 2
     assert config.data.unit_ms == 80
     assert config.data.codec_frame_rate == 12.5
     assert config.model.delta_time_fourier_bands == 8

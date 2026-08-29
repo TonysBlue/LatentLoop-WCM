@@ -1,8 +1,9 @@
 # LatentLoop
 
-实时流多模态 LatentLoop 的研究实现。当前基础设施已经包含有界逐层 KV、固定容量
-`Z_t`、单路混合麦克风、屏幕输入、直接 codec token Speech Head、独立 Action Head、
-TBPTT、精确断点恢复、WebDataset、CPU-only Ray 任务和 W&B Local。
+实时流多模态 LatentLoop 的研究实现。当前基础设施已经包含有界逐层 RecentKV、Backbone
+内固定容量语义 slots `C_t`、每层固定容量 SlowMemory、单路混合麦克风、屏幕输入、直接
+codec token Speech Head、独立 Action Head、递归重计算、精确断点恢复、WebDataset、
+CPU-only Ray 任务和 W&B Local。
 
 完整架构见 `docs/realtime-multimodal-latent-loop.md`，本地训练设计见
 `docs/local-training-platform.md`。直接流式语音的实现与运行命令见

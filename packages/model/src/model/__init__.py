@@ -10,7 +10,7 @@ from model.attention import SlowMemory
 from model.core import FactorizedSpeechHead, StreamingLatentLoop
 from model.encoders import DeltaTimeEncoder
 from model.losses import compute_jepa_loss, compute_losses
-from model.perceiver import JEPAHead, Perceiver, PredictionAdapter, Predictor
+from model.perceiver import JEPAHead, Perceiver
 from model.types import (
     ActionFrame,
     ActionHeadOutput,
@@ -30,7 +30,7 @@ from model.value import ValueHead
 __all__ = [
     "ActionFrame", "ActionHead", "ActionHeadOutput", "ActionLocalState", "Episode",
     "FactorizedSpeechHead",
-    "Perceiver", "PredictionAdapter", "Predictor", "JEPAHead", "SlowMemory",
+    "Perceiver", "JEPAHead", "SlowMemory",
     "DeltaTimeEncoder",
     "GenerationOutput", "LayerKV", "RecurrentState", "SpeechLocalState", "SpeechMode",
     "SpeechSamplingConfig", "StepOutput", "StreamUnit", "StreamingLatentLoop",

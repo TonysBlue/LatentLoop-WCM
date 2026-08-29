@@ -18,20 +18,11 @@ P_t = \mathrm{Perceiver}(O_t)
 $$
 
 $$
-Z_t = \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1})
-$$
-
-$$
-\widehat{P}_{t+1\mid t} = \mathrm{Predictor}(P_t, Z_t)
-$$
-
-$$
-F_t = \mathrm{PredictionAdapter}\!\left(\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})\right) + E_{\mathrm{future}}
-$$
-
-$$
-(H_t, \mathrm{KV}_t) = \mathrm{Backbone}
-\left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right)
+\left(H_t,C_t,\mathrm{RecentKV}_t,\mathrm{SlowMemory}_t\right)
+= \mathrm{Backbone}\!\left(
+P_t,H_{t-1},C_{t-1},
+\mathrm{RecentKV}_{t-1},\mathrm{SlowMemory}_{t-1}
+\right)
 $$
 
 $$
@@ -74,7 +65,7 @@ causal/factorized codec logits 和 Mimi codes。
 - SILENCE：只计算 mode CE，codec logits 被 mask，不调用 codec decoder；
 - SPEECH：计算 mode CE 和 8-codebook codec CE，并解码为波形 chunk。
 
-Speech Head 的 temporal state 和 previous codes 只负责相邻声学帧连续性，不是认知记忆。codec teacher forcing 只影响帧内预测，不改变跨 unit 的 Z/H/KV 状态转移。推理可以使用 greedy 或配置的采样。
+Speech Head 的 temporal state 和 previous codes 只负责相邻声学帧连续性，不是认知记忆。codec teacher forcing 只影响帧内预测，不改变跨 unit 的 C/H/RecentKV/SlowMemory 状态转移。推理可以使用 greedy 或配置的采样。
 
 ## 4. 数据契约
 
@@ -121,15 +112,14 @@ $\mathcal{L}_{\mathrm{speech\_mode}}$ 对有效 SILENCE/SPEECH 标签计算 CE�
 $\mathcal{L}_{\mathrm{speech\_codec}}$ 只对 SPEECH unit 的有效 frame/codebook 计算 CE。
 没有独立 SpeechControl、prosody、boundary、memory 或 write loss。
 
-当前和未来 speech loss 通过 Speech Head、Backbone、Perceiver、Future Adapter/Gate 以及
-TBPTT 内的 WorldStateUpdate 传播。Future 分支在 Predictor 输出处 stop-gradient，因此
-speech loss 不训练 Predictor；Predictor 只由 JEPA loss 训练。长期路径为：
+当前和未来 speech loss 通过 Speech Head、Backbone、Perceiver、语义 slots 和每层
+SlowMemory 传播。JEPA Head 不参与行为输出路径，只由 JEPA loss 训练。长期路径为：
 
 ~~~
 future speech loss
   -> future H
-  -> future Z
-  -> WorldStateUpdate
+  -> Backbone recurrence
+  -> earlier C / RecentKV / SlowMemory
 ~~~
 
 监督长期记忆是否保留有用信息。
@@ -145,5 +135,5 @@ future speech loss
 - codec worker 和 checkpoint 使用同一 identity；
 - 连续解码无 NaN、削波、帧漂移和不可接受边界突变；
 - Speech mode、每个 codebook accuracy 和静音误触发率可评测；
-- Speech Head、Backbone、Perceiver、Future Adapter/Gate 和 WorldStateUpdate 的梯度路径正常；
-- speech loss 不越过 predicted slots 的 stop-gradient 进入 Predictor。
+- Speech Head、Backbone、Perceiver、C 和 SlowMemory 的梯度路径正常；
+- speech loss 不进入 JEPA Head；JEPA target 在下一时刻 Perceiver 输出处 stop-gradient。

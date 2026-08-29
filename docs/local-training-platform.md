@@ -16,26 +16,21 @@ P_t = \mathrm{Perceiver}(O_t)
 $$
 
 $$
-Z_t = \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1})
+\left(H_t,C_t,\mathrm{RecentKV}_t,\mathrm{SlowMemory}_t\right)
+= \mathrm{Backbone}\!\left(
+P_t,H_{t-1},C_{t-1},
+\mathrm{RecentKV}_{t-1},\mathrm{SlowMemory}_{t-1}
+\right)
 $$
 
 $$
-\widehat{P}_{t+1\mid t} = \mathrm{Predictor}(P_t, Z_t)
-$$
-
-$$
-F_t = \mathrm{PredictionAdapter}\!\left(\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})\right) + E_{\mathrm{future}}
-$$
-
-$$
-(H_t, \mathrm{KV}_t) = \mathrm{Backbone}
-\left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right)
+\widehat{P}_{t+1\mid t}=\mathrm{JEPAHead}(H_t)
 $$
 
 $H_t$ 随后同时进入 Speech Head 和 Unified Action Head；训练使用 masked loss 与
 TBPTT，并把结果写入带 lineage 的原子 checkpoint。
 
-PyTorch 负责模型、递归状态、loss、优化和 checkpoint；WebDataset 负责按 episode 顺序提供 unit；Ray 负责 CPU 数据与环境外围任务；W&B Local 负责指标和谱系。KV、Z、H、audio cache 和两个 local state 保留在同一 GPU 进程。
+PyTorch 负责模型、递归状态、loss、优化和 checkpoint；WebDataset 负责按 episode 顺序提供 unit；Ray 负责 CPU 数据与环境外围任务；W&B Local 负责指标和谱系。RecentKV、C、SlowMemory、H、audio cache 和两个 local state 保留在同一 GPU 进程。
 
 ## 2. 当前环境与约束
 
@@ -84,7 +79,7 @@ LatentLoop/
 ├── docs/
 ├── packages/
 │   ├── contracts/     # 物理信号与控制面 protobuf/类型
-│   ├── model/         # Model Core：Z/H/KV、Speech Head、Action Head
+│   ├── model/         # Model Core：C/H/RecentKV/SlowMemory、Speech Head、Action Head
 │   ├── media/         # PCM 与媒体时钟校验
 │   ├── data/          # episode、WebDataset、curation、readiness
 │   └── runtime/       # 配置、codec worker、action continuation
@@ -120,7 +115,7 @@ LatentLoop/
 dataclass schema -> YAML profile -> CLI --set
 ```
 
-每次 run 保存完整 resolved config，而不是只保存 CLI 差异。配置必须包含模型形状、codec、unit 时钟、latent/KV、TBPTT、loss 权重、数据 manifest、随机种子、checkpoint 和 tracking。
+每次 run 保存完整 resolved config，而不是只保存 CLI 差异。配置必须包含模型形状、codec、unit 时钟、语义 slots、RecentKV、SlowMemory、重计算分段、监督 horizon、loss 权重、数据 manifest、随机种子、checkpoint 和 tracking。
 
 ### 4.3 统一代码路径
 
@@ -167,20 +162,15 @@ P_t = \mathrm{Perceiver}(O_t)
 $$
 
 $$
-Z_t = \mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1})
+\left(H_t,C_t,\mathrm{RecentKV}_t,\mathrm{SlowMemory}_t\right)
+= \mathrm{Backbone}\!\left(
+P_t,H_{t-1},C_{t-1},
+\mathrm{RecentKV}_{t-1},\mathrm{SlowMemory}_{t-1}
+\right)
 $$
 
 $$
-\widehat{P}_{t+1\mid t} = \mathrm{Predictor}(P_t, Z_t)
-$$
-
-$$
-F_t = \mathrm{PredictionAdapter}\!\left(\mathrm{stopgrad}(\widehat{P}_{t+1\mid t})\right) + E_{\mathrm{future}}
-$$
-
-$$
-(H_t, \mathrm{KV}_t) = \mathrm{Backbone}
-\left(P_t, Z_t, F_t, \mathrm{KV}_{t-1}\right)
+\widehat{P}_{t+1\mid t}=\mathrm{JEPAHead}(H_t)
 $$
 
 $$
@@ -205,7 +195,8 @@ Perceiver 流式输入状态，不进入顶层认知状态公式。
 @dataclass
 class RecurrentState:
     layer_kv: tuple[LayerKV, ...]
-    latent: Tensor
+    semantic_memory: Tensor
+    slow_memory: tuple[SlowMemoryState, ...]
     audio_cache: Tensor
     hidden: Tensor
     speech_local: SpeechLocalState
@@ -226,9 +217,9 @@ class StepOutput:
     action: ActionHeadOutput
     hidden: Tensor
     perceiver_slots: Tensor
-    predicted_next_slots: Tensor
-    future_gate_mean: Tensor
-    future_gate_max: Tensor
+    jepa_prediction: Tensor
+    value: Tensor
+    selected_speech_mode: Tensor
 ```
 
 forward 不执行操作系统动作、W&B 网络调用或全局 session 读取。
@@ -257,46 +248,37 @@ weight_sha256
 ```text
 MIC_MIXED + SCREEN + TIME
         -> Perceiver(P_t)
-Z_(t-1) + H_(t-1)
-        -> WorldStateUpdate -> Z_t
-P_t + Z_t
-        -> Predictor -> P_hat_(t+1|t)
-stop_grad(P_hat)
-        -> PredictionAdapter -> F_t
-P_t + Z_t + F_t + KV_(t-1)
-        -> Streaming Backbone -> H_t, KV_t
-H_t -> Speech Head + Unified Action Head
+P_t + H_(t-1) + C_(t-1) + RecentKV_(t-1) + SlowMemory_(t-1)
+        -> Streaming Backbone -> H_t, C_t, RecentKV_t, SlowMemory_t
+H_t -> Speech Head + Unified Action Head + Value Head + JEPA Head
+Perceiver(O_(t+1)) -> stop-gradient JEPA target
 ```
 
 ### 7.2 Streaming Backbone
 
-每层执行 cached self-attention、周期性 World cross-attention、门控 Future cross-attention、
-feed-forward 和 final normalization。同一 unit 的16个 slots双向互见，只读取历史 unit KV。
-KV 不区分视觉和非视觉，统一保留最近 `kv_units * 16` 个当前 slots；Z/F 不作为额外 token
-直接写入 KV。
+每层对 `[H,C]` 联合执行 cached self-attention 与 FFN；同一 unit 的工作 slots 和语义 slots
+双向互见。只有 H 写入 RecentKV，C 只作为固定数量的持久 Backbone token。RecentKV
+达到上限后，过期 H 的 K/V 由对应层的门控 Delta updater 写入固定容量 SlowMemory；每层
+读取自己的 SlowMemory，不共享矩阵。
 
-所有 profile 固定 `perceiver_slots=16`、`perceiver_layers=2`、`predictor_layers=2`；
-Smoke 只缩小 model_dim、Backbone layers、KV horizon 和数据预算，不改变 JEPA 模块拓扑。
-Perceiver 以16个 learned queries 两次执行 input cross-attention、slot self-attention 和 FFN。
-Predictor 以 P_t 为固定顺序 slots，通过 Z cross-attention 预测一个80 ms后的同形表示。
+所有 profile 固定 `perceiver_slots=16`、`perceiver_layers=2`，并显式配置
+`semantic_memory_slots` 与 `jepa_layers`。Smoke 只缩小 model_dim、Backbone layers、KV horizon
+和数据预算，不改变状态转移或 JEPA 拓扑。JEPA Head 只读取 H，预测一个 80 ms 后的同形
+Perceiver 表征；C 不直接进入任何输出 head。
 
-Future Adapter 使用 `LayerNorm -> identity-initialized Linear`。每个 Future 层根据当前 hidden
-和 cross-attention context 生成 `[B,16,1]` gate；gate projection 零初始化且 bias 为 -4。
-行为梯度在 P_hat 后停止，因此训练 Adapter/Gate 而不进入 Predictor。
-
-### 7.3 WorldStateUpdate
+### 7.3 语义 slots 与 SlowMemory
 
 $$
-Z_t = \mathcal{U}_{\theta}\left(Z_{t-1}, H_{t-1}\right)
+C_0 = E_C
 $$
 
-内部使用 latent projection、对 H 的 slot cross-attention、learned slot identity、candidate 和
-per-slot/per-dimension gate。WorldStateUpdate 不接收 `delta_t`、当前 audio/vision 或动作与语音输出；
-它也没有 memory target、probe、write 或 diversity loss。`delta_t` 只经过 DeltaTimeEncoder 后作为
-当前 Backbone 的输入特征。
+$$
+(H_t,C_t)=\mathrm{BackboneTokens}(P_t+H_{t-1},C_{t-1})
+$$
 
-`Z_t` 是抽象 latent workspace，可以在一次离散更新中重组、压缩或跳转，不要求满足严格的物理
-时间动力学。系统只维护一个 `latent` 字段，不区分预测状态和观测校正状态。
+$E_C$ 是学习到的初始语义槽位，只在 session 初始化时使用，不在每个 unit 重复相加。
+$C_t$ 和 SlowMemory 都没有独立 target、probe、write 或 diversity loss；未来行为损失沿
+递归图反向监督它们，JEPA loss 则从 H 侧训练可预测表示。
 
 ### 7.4 DeltaTimeEncoder
 
@@ -307,7 +289,7 @@ $$
 T_t^{\Delta} = \mathrm{DeltaTimeEncoder}(\Delta t_t)
 $$
 
-$\mathrm{WorldStateUpdate}(Z_{t-1}, H_{t-1})$ 的接口不包含 $\Delta t_t$。
+语义 slots 和 SlowMemory updater 的接口不读取隐藏时间戳；$\Delta t_t$ 只随当前观测进入 Backbone。
 
 ### 7.4 Speech Head
 
@@ -333,7 +315,7 @@ checkpoint 谱系和 evaluation/report 闭环，不得作为 Canary 的环境回
 
 ### 8.2 Local
 
-Local profile 用于单 GPU 完整结构验证，包含音频/视觉 encoder、latent updater、750-unit 生产形状可配置的 KV、两个 output heads、checkpoint 和 W&B。
+Local profile 用于单 GPU 完整结构验证，包含音频/视觉 encoder、语义 slots、每层 SlowMemory、750-unit 生产形状可配置的 RecentKV、两个行为 output heads、JEPA/Value 训练 head、checkpoint 和 W&B。
 
 ### 8.3 Canary 正式契约
 
@@ -421,8 +403,8 @@ $$
 $$
 
 SILENCE unit 的 codec loss 被 mask。Action 参数按 kind 激活，连续参数 NLL 与 rollout
-log-prob 使用同一 bounded 参数化。Z 没有 memory probe、write-budget、diversity、control
-或 confidence loss；JEPA 是 Predictor 的单步表示目标，不是 Z 的独立 memory target。
+log-prob 使用同一 bounded 参数化。C 与 SlowMemory 没有 memory probe、write-budget、
+diversity、control 或 confidence loss；JEPA 是 JEPA Head 的单步表示目标，不是独立 memory target。
 
 ### 10.4 梯度与模块影响
 
@@ -431,11 +413,11 @@ log-prob 使用同一 bounded 参数化。Z 没有 memory probe、write-budget�
 | Speech Head | mode/codec loss | speech mode、codec 和局部连续性 |
 | Action Head | structured frame NLL | kind、参数、TYPE continuation |
 | Perceiver | Speech、Action/RL、JEPA source | 多模态观察表示 |
-| Predictor | JEPA | 单步未来表示 |
-| Future Adapter/Gate | Speech、Action/RL | 受控未来先验 |
-| Backbone | Speech、Action/RL | 共享多模态表示 |
-| WorldStateUpdate/Z | 未来行为 loss 与 JEPA source | 长期目标、约束和抽象任务状态 |
-| KV | 无参数 loss | 近期精确上下文 |
+| JEPA Head | JEPA | 从 H 预测单步未来表示 |
+| Backbone | Speech、Action/RL、JEPA source | 共享多模态表示与状态转移 |
+| 语义 slots C | 未来行为与 JEPA source | 长期目标、约束和抽象任务状态 |
+| SlowMemory updater | 未来行为与 JEPA source | 过期 KV 的固定容量关联摘要 |
+| RecentKV | 无参数 loss | 近期精确上下文 |
 | speech/action local | 对应 head loss | 跨帧/跨 unit 连续性 |
 
 ### 10.5 长时监督
@@ -443,8 +425,8 @@ log-prob 使用同一 bounded 参数化。Z 没有 memory probe、write-budget�
 ```text
 future Speech/Action loss
  -> future H
- -> future Z
- -> earlier WorldStateUpdate
+ -> Backbone recurrence
+ -> earlier C / RecentKV / SlowMemory
 ```
 
 TBPTT 不能短于要验证的 memory horizon；生产使用 750 units。
@@ -453,7 +435,7 @@ TBPTT 不能短于要验证的 memory horizon；生产使用 750 units。
 
 chunk 内 $P_{t+1}$ 同时作为下一时刻正常可微 source 和上一时刻 detach target。chunk 最后
 一个 source 若还有 successor，只调用同一 Perceiver 编码 O_(t+1) 和 audio cache 副本；
-不更新 Z/H/KV 并丢弃新 cache。完整梯度累积周期使用同一参数版本，只有 sync 边界执行
+不更新 C/H/RecentKV/SlowMemory 并丢弃新 cache。完整梯度累积周期使用同一参数版本，只有 sync 边界执行
 optimizer step；模型 unit index 不能被当作 optimizer version。
 
 ## 11. Checkpoint 与恢复
@@ -466,7 +448,7 @@ checkpoint 保存：
 model weights
 optimizer/scheduler/scaler state
 Python/NumPy/Torch/CUDA RNG
-RecurrentState: Z, H, KV, audio_cache,
+RecurrentState: C, H, RecentKV, SlowMemory, audio_cache,
                 speech_local, action_local, unit_index
 epoch/shard/sample/unit cursor
 global update and consumed units
@@ -498,7 +480,7 @@ W&B 只记录观测和谱系，不保存完整原始数据或替代 checkpoint�
 - model/parameter count；
 - GPU、CUDA、PyTorch；
 - seed、split、run/stage identity；
-- total、speech、action、latent on/off、KV、queue 和 system metrics。
+- total、speech、action、JEPA、RecentKV、SlowMemory、queue 和 system metrics。
 
 原始音视频不上报；屏幕媒体必须脱敏。服务不可用时切换 offline，不中断训练。
 
@@ -508,7 +490,7 @@ Ray 负责 CPU 数据生成、音频处理、屏幕变化检测、shard 校验�
 
 - 每个 unit 的核心 train/forward；
 - GPU 参数或 recurrent state；
-- Object Store 中的 KV、Z、H 或 playback queue；
+- Object Store 中的 RecentKV、C、SlowMemory、H 或 playback queue；
 - 竞争同一 GPU 的多个训练 trial。
 
 ## 14. 验收与测试
@@ -523,7 +505,7 @@ StreamUnit shape、80 ms 时钟、mask、manifest/shard identity、runtime ident
 
 ### 14.3 状态闭环
 
-KV 长度不超过配置上限；淘汰只发生在完整 unit 边界；Z/H/local state 形状固定；chunk 内有跨 unit 梯度，chunk 外图已 detach；latent on/off 的长时行为可测。
+RecentKV 长度不超过配置上限；淘汰只发生在完整 unit 边界；C/H/SlowMemory/local state 形状固定；监督 horizon 内有跨 unit 梯度，horizon 外图已 detach；长流固定容量行为可测。
 
 ### 14.4 语音与 action
 
@@ -560,12 +542,11 @@ TYPE 跨 unit continuation、session/unit 顺序和 Harness safety gate 通过�
 chronological WebDataset episodes
 -> StreamUnit(80 ms mixed mic + screen)
 -> Perceiver(O_t) = P_t
--> Z_t = WorldStateUpdate(Z_(t-1), H_(t-1))
--> Predictor(P_t, Z_t) = P_hat_(t+1|t)
--> PredictionAdapter(stop_grad(P_hat_(t+1|t))) + E_future = F_t
--> H_t, KV_t = Backbone(P_t, Z_t, F_t, KV_(t-1))
--> Speech Head + Unified Action Head
--> masked Speech/Action/JEPA loss + TBPTT
+-> Backbone(P_t, H_(t-1), C_(t-1), RecentKV_(t-1), SlowMemory_(t-1))
+-> H_t, C_t, RecentKV_t, SlowMemory_t
+-> H_t -> Speech Head + Unified Action Head + Value Head + JEPA Head
+-> stopgrad(Perceiver(O_(t+1))) as JEPA target
+-> masked Speech/Action/JEPA loss + recurrent rematerialization
 -> atomic checkpoint + W&B lineage
 ```
 

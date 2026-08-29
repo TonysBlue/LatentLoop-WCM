@@ -21,8 +21,16 @@ from contracts.protocol import observation_to_payload
 from data import EpisodeShardReader, SyntheticEpisodeDataset
 from data.curation.readiness import check_readiness
 from model import StreamingLatentLoop, action_frame_log_prob, compute_jepa_loss, compute_losses
-from model.types import ActionFrame, Episode, RecurrentState, SpeechSamplingConfig, StreamUnit
+from model.types import (
+    ActionFrame,
+    Episode,
+    RecurrentState,
+    SpeechSamplingConfig,
+    StreamUnit,
+)
 from runtime.config import ProjectConfig
+from torch.utils import _pytree
+from torch.utils.checkpoint import checkpoint
 
 from training.checkpoint import (
     CheckpointManager,
@@ -70,7 +78,7 @@ def _sequence_jepa_loss(
     """Pair consecutive outputs and optionally encode one target-only successor."""
     if not outputs:
         raise ValueError("JEPA sequence requires at least one source output")
-    predicted = [output.predicted_next_slots for output in outputs[:-1]]
+    predicted = [output.jepa_prediction for output in outputs[:-1]]
     sources = [output.perceiver_slots for output in outputs[:-1]]
     targets = [output.perceiver_slots for output in outputs[1:]]
     if lookahead is not None:
@@ -78,11 +86,11 @@ def _sequence_jepa_loss(
             lookahead,
             outputs[-1].state.audio_cache.clone(),
         )
-        predicted.append(outputs[-1].predicted_next_slots)
+        predicted.append(outputs[-1].jepa_prediction)
         sources.append(outputs[-1].perceiver_slots)
         targets.append(target)
     if not predicted:
-        zero = outputs[0].predicted_next_slots.sum() * 0.0
+        zero = outputs[0].jepa_prediction.sum() * 0.0
         return {"total": zero, "prediction": zero, "variance": zero}, 0
     losses = compute_jepa_loss(
         torch.stack(predicted),
@@ -91,6 +99,86 @@ def _sequence_jepa_loss(
     )
     pairs = sum(value.shape[0] for value in predicted)
     return losses, pairs
+
+
+def _rematerialized_segment(
+    model: StreamingLatentLoop,
+    units: Sequence[StreamUnit],
+    state: RecurrentState,
+    teacher_codes: Sequence[torch.Tensor | None],
+    *,
+    action_masks: Sequence[torch.Tensor] | None = None,
+    action_frames: Sequence[ActionFrame] | None = None,
+) -> tuple[tuple[Any, ...], RecurrentState]:
+    """Rematerialize each recurrent transition without cutting the segment graph."""
+    if not units:
+        raise ValueError("rematerialization segment must contain at least one unit")
+    masks = action_masks or [unit.action_supervision_mask for unit in units]
+    frames = action_frames or [unit.action for unit in units]
+    current = state
+    outputs: list[Any] = []
+    for unit, codes, action_mask, action_frame in zip(
+        units, teacher_codes, masks, frames, strict=True
+    ):
+        state_flat, state_spec = _pytree.tree_flatten(current)
+        output_spec: list[Any] = []
+
+        def make_run(
+            step_unit: StreamUnit,
+            step_codes: torch.Tensor | None,
+            step_action_mask: torch.Tensor,
+            step_action_frame: ActionFrame,
+            step_state_spec: Any,
+            step_output_spec: list[Any],
+        ) -> Any:
+            def run(*initial_tensors: torch.Tensor) -> tuple[torch.Tensor, ...]:
+                initial = _pytree.tree_unflatten(list(initial_tensors), step_state_spec)
+                output = model(
+                    step_unit,
+                    initial,
+                    step_codes,
+                    speech_teacher_mode=step_unit.speech_mode,
+                    action_teacher_frame=step_action_frame,
+                    action_teacher_mask=step_action_mask,
+                )
+                flat, spec = _pytree.tree_flatten(output)
+                if not step_output_spec:
+                    unique: list[torch.Tensor] = []
+                    positions: dict[int, int] = {}
+                    aliases: list[int] = []
+                    for tensor in flat:
+                        identity = id(tensor)
+                        if identity not in positions:
+                            positions[identity] = len(unique)
+                            unique.append(tensor)
+                        aliases.append(positions[identity])
+                    step_output_spec.extend((spec, aliases))
+                    return tuple(unique)
+                aliases = step_output_spec[1]
+                return tuple(flat[index] for index in _first_alias_positions(aliases))
+
+            return run
+
+        flat_output = checkpoint(
+            make_run(unit, codes, action_mask, action_frame, state_spec, output_spec),
+            *state_flat,
+            use_reentrant=False,
+            preserve_rng_state=True,
+        )
+        output = _pytree.tree_unflatten(
+            [flat_output[index] for index in output_spec[1]], output_spec[0]
+        )
+        outputs.append(output)
+        current = output.state
+    return tuple(outputs), current
+
+
+def _first_alias_positions(aliases: Sequence[int]) -> tuple[int, ...]:
+    """Map unique tensor indices back to their first position in a flattened tree."""
+    first: dict[int, int] = {}
+    for position, unique_index in enumerate(aliases):
+        first.setdefault(unique_index, position)
+    return tuple(first[index] for index in range(len(first)))
 
 
 def _aggregate_update_metrics(
@@ -437,23 +525,27 @@ def train(
                         speech_valid = torch.zeros((), device=accelerator.device, dtype=torch.long)
                         output = None
                         outputs: list[Any] = []
-                        for unit in moved:
-                            sampling_probability = scheduled_sampling_probability(
-                                train_state["update"], config
+                        segment_units = config.model.rematerialization_segment_units
+                        sampling_probability = scheduled_sampling_probability(
+                            train_state["update"], config
+                        )
+                        teacher_codes = [
+                            unit.speech_codes
+                            if sampling_probability <= 0
+                            or random.random() >= sampling_probability
+                            else None
+                            for unit in moved
+                        ]
+                        for segment_start in range(0, len(moved), segment_units):
+                            segment = moved[segment_start : segment_start + segment_units]
+                            segment_teachers = teacher_codes[
+                                segment_start : segment_start + segment_units
+                            ]
+                            segment_outputs, recurrent = _rematerialized_segment(
+                                model, segment, recurrent, segment_teachers
                             )
-                            use_teacher = (
-                                sampling_probability <= 0 or random.random() >= sampling_probability
-                            )
-                            output = model(
-                                unit,
-                                recurrent,
-                                unit.speech_codes if use_teacher else None,
-                                speech_teacher_mode=unit.speech_mode,
-                                action_teacher_frame=unit.action,
-                                action_teacher_mask=unit.action_supervision_mask,
-                            )
-                            recurrent = output.state
-                            outputs.append(output)
+                            outputs.extend(segment_outputs)
+                        for unit, output in zip(moved, outputs, strict=True):
                             unit_losses = compute_losses(
                                 output,
                                 unit,
@@ -763,9 +855,8 @@ def configure_trainable_parameters(model: StreamingLatentLoop, config: ProjectCo
     head_prefixes = ("speech_head.", "action_head.")
     selective_prefixes = (
         "audio_encoder.",
-        "semantic_gate",
-        "semantic_attention.",
-        "slow_memory.",
+        "semantic_slot_identity",
+        "slow_memories.",
         "final_norm.",
     )
     first_top_layer = max(0, config.model.num_layers * 3 // 4)
@@ -1033,20 +1124,26 @@ def _train_ppo_candidate(
         current_action: list[torch.Tensor] = []
         current_values: list[torch.Tensor] = []
         outputs: list[Any] = []
-        for item in units:
-            stream_unit = observation_to_stream_unit(item.observation, config).to(device)
-            output = candidate.forward_step(
-                stream_unit,
+        stream_units = [
+            observation_to_stream_unit(item.observation, config).to(device) for item in units
+        ]
+        segment_units = config.model.rematerialization_segment_units
+        for segment_start in range(0, len(units), segment_units):
+            segment_items = units[segment_start : segment_start + segment_units]
+            segment = stream_units[segment_start : segment_start + segment_units]
+            segment_outputs, state = _rematerialized_segment(
+                candidate,
+                segment,
                 state,
-                speech_teacher_codes=item.codes.to(device),
-                speech_teacher_mode=item.mode.to(device),
-                action_teacher_frame=item.action.to(device),
-                action_teacher_mask=torch.ones_like(
-                    item.mode, dtype=torch.bool, device=device
-                ),
+                [item.codes.to(device) for item in segment_items],
+                action_masks=[
+                    torch.ones_like(item.mode, dtype=torch.bool, device=device)
+                    for item in segment_items
+                ],
+                action_frames=[item.action.to(device) for item in segment_items],
             )
-            state = output.state
-            outputs.append(output)
+            outputs.extend(segment_outputs)
+        for item, output in zip(units, outputs, strict=True):
             speech_logprob, action_logprob = _policy_logprobs(
                 output,
                 item.mode.to(device),

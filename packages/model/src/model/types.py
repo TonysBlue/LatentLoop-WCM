@@ -16,6 +16,7 @@ from contracts import (
 )
 from contracts import ActionFrame as ContractActionFrame
 from torch import Tensor
+from torch.utils import _pytree
 
 
 class SpeechMode(IntEnum):
@@ -406,15 +407,6 @@ class RecurrentState:
     action_local: ActionLocalState
     unit_index: Tensor
 
-    @property
-    def latent(self) -> Tensor:
-        """Compatibility alias for checkpoints/tools written before C_t."""
-        return self.semantic_memory
-
-    @latent.setter
-    def latent(self, value: Tensor) -> None:
-        self.semantic_memory = value
-
     def detach(self) -> RecurrentState:
         return RecurrentState(
             layer_kv=tuple(cache.detach() for cache in self.layer_kv),
@@ -453,9 +445,7 @@ class StepOutput:
     action: ActionHeadOutput
     hidden: Tensor
     perceiver_slots: Tensor
-    predicted_next_slots: Tensor
-    future_gate_mean: Tensor
-    future_gate_max: Tensor
+    jepa_prediction: Tensor
     value: Tensor
     selected_speech_mode: Tensor
 
@@ -490,3 +480,18 @@ class GenerationOutput:
     speech_mode: Tensor
     speech_codes: Tensor
     action_frame: ActionFrame
+
+
+# Activation checkpointing must see every tensor nested in recurrent and step
+# dataclasses; otherwise recomputation silently drops parts of the autograd graph.
+for _checkpoint_dataclass in (
+    ActionFrame,
+    LayerKV,
+    SlowMemoryState,
+    SpeechLocalState,
+    ActionLocalState,
+    RecurrentState,
+    ActionHeadOutput,
+    StepOutput,
+):
+    _pytree.register_dataclass(_checkpoint_dataclass)

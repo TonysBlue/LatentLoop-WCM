@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import torch
 from data import SyntheticEpisodeDataset, write_episode_shards
+from model import StreamingLatentLoop
+from model.losses import compute_losses
 from runtime.config import ProjectConfig
 from training import train
+from training.training import _rematerialized_segment
 
 
 class _RecordingTracker:
@@ -26,6 +29,72 @@ class _RecordingTracker:
     @property
     def run_url(self) -> None:
         return None
+
+
+def test_recurrent_rematerialization_matches_direct_unroll(
+    smoke_config: ProjectConfig,
+) -> None:
+    torch.manual_seed(11)
+    direct = StreamingLatentLoop(smoke_config.model)
+    rematerialized = StreamingLatentLoop(smoke_config.model)
+    rematerialized.load_state_dict(direct.state_dict())
+    units = SyntheticEpisodeDataset(smoke_config.data, smoke_config.model).make_episode(0).units[:4]
+
+    direct_state = direct.initial_state(1, "cpu")
+    direct_outputs = []
+    for unit in units:
+        output = direct(
+            unit,
+            direct_state,
+            unit.speech_codes,
+            speech_teacher_mode=unit.speech_mode,
+            action_teacher_frame=unit.action,
+            action_teacher_mask=unit.action_supervision_mask,
+        )
+        direct_outputs.append(output)
+        direct_state = output.state
+    direct_loss = sum(
+        compute_losses(output, unit)["total"]
+        for output, unit in zip(direct_outputs, units, strict=True)
+    )
+    direct_loss.backward()
+
+    first_outputs, boundary_state = _rematerialized_segment(
+        rematerialized,
+        units[:2],
+        rematerialized.initial_state(1, "cpu"),
+        [unit.speech_codes for unit in units[:2]],
+    )
+    second_outputs, rematerialized_state = _rematerialized_segment(
+        rematerialized,
+        units[2:],
+        boundary_state,
+        [unit.speech_codes for unit in units[2:]],
+    )
+    rematerialized_outputs = first_outputs + second_outputs
+    rematerialized_loss = sum(
+        compute_losses(output, unit)["total"]
+        for output, unit in zip(rematerialized_outputs, units, strict=True)
+    )
+    rematerialized_loss.backward()
+
+    assert torch.equal(direct_state.hidden, rematerialized_state.hidden)
+    assert torch.equal(direct_state.semantic_memory, rematerialized_state.semantic_memory)
+    assert all(
+        torch.equal(left.matrix, right.matrix)
+        for left, right in zip(
+            direct_state.slow_memory, rematerialized_state.slow_memory, strict=True
+        )
+    )
+    for (name, direct_parameter), rematerialized_parameter in zip(
+        direct.named_parameters(), rematerialized.parameters(), strict=True
+    ):
+        if direct_parameter.grad is None or rematerialized_parameter.grad is None:
+            assert direct_parameter.grad is rematerialized_parameter.grad, name
+            continue
+        assert torch.allclose(
+            direct_parameter.grad, rematerialized_parameter.grad, atol=1e-6, rtol=1e-5
+        ), name
 
 
 def test_smoke_training_and_atomic_checkpoint(smoke_config: ProjectConfig) -> None:
