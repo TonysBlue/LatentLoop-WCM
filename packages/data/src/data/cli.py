@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import subprocess
+import sys
 from dataclasses import asdict
 from pathlib import Path
 
@@ -10,6 +13,12 @@ from media import benchmark_decoder
 from model import StreamingLatentLoop
 from runtime.config import load_config
 
+from data.capture import (
+    CaptureLedger,
+    ExpertCaptureSession,
+    action_frame_from_dict,
+    speech_signal_from_base64,
+)
 from data.codec_targets import encode_target_speech
 from data.curation import (
     audit_canary_data,
@@ -24,6 +33,7 @@ from data.curation import (
 from data.curation.prepare import codec_client
 from data.overfit import SpeechOverfitDataset
 from data.ray import generate_synthetic_with_ray, write_ray_report
+from data.replay import replay_episode, replay_ledger
 from data.speech_import import import_speech_manifest
 from data.synthetic import SyntheticEpisodeDataset
 from data.webdataset import EpisodeShardReader, write_episode_shards
@@ -53,6 +63,31 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.choices["benchmark-codec"].add_argument("--frames", type=int, default=250)
     subparsers.choices["benchmark-codec"].add_argument("--report")
     subparsers.choices["inspect-model"].add_argument("--report")
+    capture = subparsers.add_parser("capture")
+    capture.add_argument("--config", required=True)
+    capture.add_argument("--harness-socket", required=True)
+    capture.add_argument("--snapshot", required=True)
+    capture.add_argument("--session-id", required=True)
+    capture.add_argument("--lineage-id", required=True)
+    capture.add_argument("--task-id", required=True)
+    capture.add_argument("--split", choices=("train", "validation", "test"), default="train")
+    capture.add_argument("--ledger", required=True)
+    capture.add_argument("--output", required=True, help="staging shard pattern")
+    capture.add_argument("--seed", type=int, default=17)
+    capture.add_argument("--input", default="-", help="JSONL expert events or - for stdin")
+    capture.add_argument("--viewer-socket")
+    replay = subparsers.add_parser("replay")
+    replay.add_argument("--harness-socket", required=True)
+    replay_source = replay.add_mutually_exclusive_group(required=True)
+    replay_source.add_argument("--ledger")
+    replay_source.add_argument("--shards")
+    replay.add_argument("--config")
+    replay.add_argument("--episode-id")
+    replay.add_argument("--snapshot", required=True)
+    replay.add_argument("--session-id", required=True)
+    replay.add_argument("--seed", type=int, default=17)
+    replay.add_argument("--non-realtime", action="store_true")
+    replay.add_argument("--viewer-socket")
     readiness = subparsers.add_parser("check-readiness")
     readiness.add_argument("--config", required=True)
     readiness.add_argument("--root")
@@ -92,7 +127,131 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.choices["build-canary-manifest"].add_argument("--screen-command")
     subparsers.choices["audit-canary-data"].add_argument("--mimi-report")
     args = parser.parse_args(argv)
-    if args.command == "check-readiness":
+    if args.command == "capture":
+        from harness.transport.control import HarnessControlClient
+
+        config = load_config(args.config)
+        client = HarnessControlClient(args.harness_socket)
+        harness_identity = client.identity()
+        ledger = CaptureLedger(
+            args.ledger, session_id=args.session_id, lineage_id=args.lineage_id
+        )
+        session = ExpertCaptureSession(
+            client, ledger, seed=args.seed, snapshot_id=args.snapshot
+        )
+        source = sys.stdin
+        viewer: subprocess.Popen[bytes] | None = None
+        try:
+            session.start()
+            viewer = _start_viewer(args.viewer_socket)
+            source = (
+                sys.stdin
+                if args.input == "-"
+                else Path(args.input).expanduser().open(encoding="utf-8")
+            )
+            for line in source:
+                if not line.strip():
+                    continue
+                event = json.loads(line)
+                frame = action_frame_from_dict(event.get("action_frame", event))
+                speech = speech_signal_from_base64(
+                    str(event.get("speech_pcm_b64", "")),
+                    silent=bool(event.get("speech_silent", False)),
+                )
+                session.step(frame, speech)
+            episode = session.finish(
+                {
+                    "codec_id": config.data.codec_id,
+                    "codec_weight_hash": config.data.codec_weight_hash,
+                    "codec_revision": config.data.codec_revision,
+                    **harness_identity,
+                    "source": "expert-capture",
+                    "source_license": "internal-consented-capture",
+                    "redistribution_allowed": False,
+                    "split": args.split,
+                    "task_id": args.task_id,
+                    "session_id_hash": hashlib.sha256(
+                        args.session_id.encode()
+                    ).hexdigest(),
+                    "device_id_hash": hashlib.sha256(
+                        harness_identity["environment_id"].encode()
+                    ).hexdigest(),
+                }
+            )
+            write_episode_shards([episode], args.output)
+        finally:
+            if args.input != "-":
+                source.close()
+            session.close()
+            if viewer is not None:
+                viewer.terminate()
+        print(
+            json.dumps(
+                {"session_id": args.session_id, "units": len(ledger.records), "sealed": True}
+            )
+        )
+    elif args.command == "replay":
+        from harness.transport.control import HarnessControlClient
+
+        client = HarnessControlClient(args.harness_socket)
+        viewer: subprocess.Popen[bytes] | None = None
+
+        def start_viewer() -> None:
+            nonlocal viewer
+            viewer = _start_viewer(args.viewer_socket)
+
+        def print_replay_event(event) -> None:
+            print(
+                json.dumps(
+                    {
+                        "unit_index": event.unit_index,
+                        "receipt_accepted": event.receipt_accepted,
+                        "execution_latency_ms": event.execution_latency_ms,
+                        "observation_unit_index": event.observation_unit_index,
+                        "elapsed_ms": event.elapsed_ms,
+                    },
+                    separators=(",", ":"),
+                ),
+                flush=True,
+            )
+
+        try:
+            replay_args = {
+                "harness": client,
+                "snapshot_id": args.snapshot,
+                "seed": args.seed,
+                "session_id": args.session_id,
+                "realtime": not args.non_realtime,
+                "step": False,
+                "on_started": start_viewer,
+                "on_event": print_replay_event,
+            }
+            if args.ledger:
+                events = replay_ledger(args.ledger, **replay_args)
+            else:
+                if not args.config:
+                    raise ValueError("--config is required with --shards")
+                config = load_config(args.config)
+                events = replay_episode(
+                    args.shards,
+                    data_config=config.data,
+                    model_config=config.model,
+                    episode_id=args.episode_id,
+                    **replay_args,
+                )
+        finally:
+            if viewer is not None:
+                viewer.terminate()
+        print(
+            json.dumps(
+                {
+                    "session_id": args.session_id,
+                    "units": len(events),
+                    "realtime": not args.non_realtime,
+                }
+            )
+        )
+    elif args.command == "check-readiness":
         config = load_config(args.config)
         root = args.root or config.runtime.data_root
         print(json.dumps(check_readiness(root, config=config), indent=2))
@@ -230,3 +389,14 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError(f"unknown data command: {args.command}")
         print(json.dumps(report, indent=2, default=str))
     return 0
+
+
+def _start_viewer(socket_path: str | None) -> subprocess.Popen[bytes] | None:
+    if not socket_path:
+        return None
+    path = Path(socket_path).expanduser().resolve()
+    return subprocess.Popen(
+        ["remote-viewer", f"spice+unix://{path}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )

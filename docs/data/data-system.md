@@ -16,3 +16,7 @@ locked source manifest -> current staging writer -> Mimi worker encode
 report 和 resolved config 组成 lineage。Canary 缺 source asset 时必须失败，不能生成空或
 fixture shard。模型输入只有混合 mic、screen、time 和显式 target mask；decoded action、
 receipt、reward、DOM 和 evaluator 私有状态只用于审计或 RL trace。
+
+真实专家轨迹先通过 Harness 采集为追加写 session ledger，再导出当前 staging episode；
+具体协议见 [Harness 驱动的数据采集系统](../data-collection.md)。数据检查使用
+[无模型 Harness 在环数据回放](../data-replay.md)，其 speech/action 由数据驱动且不调用模型。

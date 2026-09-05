@@ -7,6 +7,9 @@ import time
 import pytest
 from contracts import (
     ActuationSignal,
+    ButtonPhase,
+    ControlKind,
+    ControlSignal,
     EnvironmentReceipt,
     MicSignal,
     ObservationSignal,
@@ -14,6 +17,7 @@ from contracts import (
     SpeechSignal,
 )
 from contracts.protocol import actuation_to_payload
+from harness.action.safety import SafetyGate
 from harness.transport.control import HarnessControlClient, HarnessControlServer
 
 
@@ -123,3 +127,41 @@ def test_harness_control_rejects_order_errors_and_duplicate_lifetime_session() -
         )
     server.close()
     assert closed == ["closed"]
+
+
+def test_harness_control_applies_safety_gate_before_backend() -> None:
+    server = HarnessControlServer(
+        FakeBackend,
+        "/tmp/unused.sock",
+        safety_gate=SafetyGate(require_approval_for={ControlKind.POINTER_BUTTON}),
+    )
+    server._handle(
+        {
+            "operation": "start_lifetime_session",
+            "initial_snapshot_id": "snapshot",
+            "seed": 1,
+            "session_id": "session",
+        }
+    )
+    output = ActuationSignal(
+        "session",
+        0,
+        SpeechSignal(b"x" * 7680, silent=True),
+        controls=(
+            ControlSignal(
+                ControlKind.POINTER_BUTTON,
+                "click",
+                button=0,
+                button_phase=ButtonPhase.CLICK,
+            ),
+        ),
+    )
+    with pytest.raises(PermissionError, match="requires approval"):
+        server._handle(
+            {
+                "operation": "apply",
+                "session_id": "session",
+                "actuation": base64.b64encode(actuation_to_payload(output)).decode(),
+            }
+        )
+    server.close()

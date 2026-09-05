@@ -33,6 +33,8 @@ from contracts.protocol import (
     receipt_to_payload,
 )
 
+from harness.action.safety import SafetyGate
+
 
 def _read_exact(connection: socket.socket, size: int) -> bytes:
     output = bytearray()
@@ -64,6 +66,7 @@ class HarnessControlServer:
         expected_environment_version: str | None = None,
         expected_protocol_version: str = "realtime-v2",
         expected_action_schema_id: str = "structured-action-v1",
+        safety_gate: SafetyGate | None = None,
     ) -> None:
         self.backend_factory = backend_factory
         self.socket_path = Path(socket_path).expanduser()
@@ -72,6 +75,7 @@ class HarnessControlServer:
         self.expected_environment_version = expected_environment_version
         self.expected_protocol_version = expected_protocol_version
         self.expected_action_schema_id = expected_action_schema_id
+        self.safety_gate = safety_gate or SafetyGate()
         self._backends: dict[str, _SessionState] = {}
         self._lock = threading.RLock()
         self._closed = threading.Event()
@@ -213,6 +217,8 @@ class HarnessControlServer:
                 output = message_to_actuation(payload)
                 if output.session_id != session_id or output.unit_index != state.next_unit:
                     raise ValueError("actuation session or unit is out of order")
+                for control in output.controls:
+                    self.safety_gate.validate(control)
                 observation, receipt = self._apply_backend(state, output)
                 self._validate_observation(observation, session_id, state.next_unit + 1)
                 if receipt.session_id != session_id or receipt.unit_index != state.next_unit:

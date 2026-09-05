@@ -479,6 +479,7 @@ name = "latentloop-data"
 version = "0.1.0"
 source = { editable = "packages/data" }
 dependencies = [
+    { name = "harness" },
     { name = "latentloop-media" },
     { name = "latentloop-model" },
     { name = "latentloop-runtime" },
@@ -489,6 +490,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "harness", editable = "systems/harness" },
     { name = "latentloop-media", editable = "packages/media" },
     { name = "latentloop-model", editable = "packages/model" },
     { name = "latentloop-runtime", editable = "packages/runtime" },

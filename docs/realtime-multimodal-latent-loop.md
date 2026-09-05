@@ -5,6 +5,7 @@
 > 目标：构建持续接收真实混合麦克风和屏幕流、直接生成语音并控制电脑的 always-on 全双工多模态模型。
 > 专项协议：[直接流式语音实施说明](direct-speech.md) · [统一电脑动作输出协议](unified-action.md)
 > 训练协议：[统一三阶段训练架构](three-stage-training.md) · [Online RL：Online Recurrent PPO 与真实隔离电脑环境](online-recurrent-ppo-training.md)
+> 数据协议：[Harness 驱动的数据采集系统](data-collection.md) · [无模型 Harness 在环数据回放](data-replay.md)
 
 ## 1. 方案概述
 
